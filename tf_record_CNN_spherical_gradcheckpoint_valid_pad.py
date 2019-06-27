@@ -798,7 +798,7 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
     if branched:
         print("Class Labels:" + str(sess.run(class_num_batch)))
     #sess.run(cost)
-    time.sleep(200)
+    time.sleep(60)
     print("Examples in Queue:",sess.run('example_queue/random_shuffle_queue_Size:0'))
 
 
