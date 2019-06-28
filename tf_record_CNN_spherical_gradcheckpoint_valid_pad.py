@@ -687,13 +687,14 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
             step = 0
             try:
                 eval_vars = list(combined_dict[0].values())
+                eval_keys = list(combined_dict[0].keys())
                 while True:
                     pred, cd, e_vars = sess.run([correct_pred, cond_dist, eval_vars])
                     e_vars = np.squeeze(e_vars)
                     array_len = len(e_vars)
                     split = np.vsplit(e_vars,array_len)
+                    batch_conditional += [(cond,var) for cond, var in zip(cd,e_vars.T)]
                     split.insert(0,pred)
-                    batch_conditional += [(cond,var) for cond, var in zip(cd, np.squeeze(e_vars))]
                     batch_acc += np.dstack(split).tolist()[0]
 
                     if branched:
@@ -702,7 +703,7 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                         array_len2 = len(e_vars2)
                         split2 = np.vsplit(e_vars2,array_len2)
                         split2.insert(0,pred2)
-                        batch_conditional2 += [(cond,var) for cond,var in zip(cd2,np.squeeze(e_vars))]
+                        batch_conditional2 += [(cond,var) for cond,var in zip(cd2,e_vars,T)]
                         batch_acc2 += np.dstack(split2).tolist()[0]
 
                     step+=1
@@ -753,6 +754,9 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                         json.dump(acc_accuracy,f)
                         if branched:
                             json.dump(acc_accuracy2,f)
+                    with open(newpath+'/keys_test_{}_iter{}.json'.format(stimuli_name,stim),'w') as f:
+                        json.dumps(eval_keys,f)
+
                 else:
                     stimuli_name = train_path_pattern.split("/")[-2]
                     np.save(newpath+'/plot_array_padded_{}_iter{}.npy'.format(stimuli_name,stim),batch_acc)
@@ -768,6 +772,8 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                         json.dump(acc_accuracy,f)
                         if branched:
                             json.dump(acc_accuracy2,f)
+                    with open(newpath+'/keys_test_{}_iter{}.json'.format(stimuli_name,stim),'w') as f:
+                        json.dumps(eval_keys,f)
  
  
      #acc= sess.run(test_acc)
