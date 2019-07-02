@@ -755,7 +755,7 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                         if branched:
                             json.dump(acc_accuracy2,f)
                     with open(newpath+'/keys_test_{}_iter{}.json'.format(stimuli_name,stim),'w') as f:
-                        json.dumps(eval_keys,f)
+                        json.dump(eval_keys,f)
 
                 else:
                     stimuli_name = train_path_pattern.split("/")[-2]
@@ -773,7 +773,7 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                         if branched:
                             json.dump(acc_accuracy2,f)
                     with open(newpath+'/keys_test_{}_iter{}.json'.format(stimuli_name,stim),'w') as f:
-                        json.dumps(eval_keys,f)
+                        json.dump(eval_keys,f)
  
  
      #acc= sess.run(test_acc)
