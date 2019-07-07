@@ -690,8 +690,8 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                 eval_keys = list(combined_dict[0].keys())
                 while True:
                     pred, cd, e_vars = sess.run([correct_pred, cond_dist, eval_vars])
-                    e_vars = np.squeeze(e_vars)
                     array_len = len(e_vars)
+                    e_vars = np.array([np.squeeze(x) for x in e_vars])
                     split = np.vsplit(e_vars,array_len)
                     batch_conditional += [(cond,var) for cond, var in zip(cd,e_vars.T)]
                     split.insert(0,pred)
