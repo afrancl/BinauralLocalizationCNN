@@ -1,4 +1,5 @@
 from tf_record_CNN_spherical_gradcheckpoint_valid_pad import tf_record_CNN_spherical
+import tensorflow as tf
 import os
 import glob
 import numpy as np
@@ -45,11 +46,15 @@ init = 0
 bkgd_train_path_pattern = str(sys.argv[2])
 train_path_pattern = str(sys.argv[3])
 model_version=[]
-model_version = list(map(int, list((str(sys.argv[4]).split(',')))))
-
+model_version = list(map(int,list((str(sys.argv[4]).split(',')))))
+regularizer=None
 
 #newpath='/om2/user/francl/localization_runs/old_hrirs_no_hanning_window_valid_padding/arch_number_'+str(arch_ID)+'_init_'+str(init)
-newpath='/om2/user/gahlm/dataset_pipeline_test/arch_number_'+str(arch_ID)+'_init_'+str(init)
+if regularizer is None:
+    newpath='/om2/user/gahlm/dataset_pipeline_test/arch_number_'+str(arch_ID)+'_init_'+str(init)
+else:
+    newpath='/om2/user/gahlm/dataset_pipeline_test/arch_number_'+str(arch_ID)+'_init_'+str(init)+'_reg'
+
 if not os.path.exists(newpath):
     os.mkdir(newpath)
 
@@ -66,4 +71,4 @@ if os.path.isfile(newpath+'/curve_no_resample_w_cutoff_vary_loc.json'):
     testing = True
 
 if testing:
-    test=tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq_label,sam_tones,transposed_tones,precedence_effect,narrowband_noise,all_positions_bkgd,background_textures,testing,branched,zero_padded,stacked_channel,model_version,num_epochs,train_path_pattern,bkgd_train_path_pattern,arch_ID,config_array,files,num_files,newpath)
+    test=tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq_label,sam_tones,transposed_tones,precedence_effect,narrowband_noise,all_positions_bkgd,background_textures,testing,branched,zero_padded,stacked_channel,model_version,num_epochs,train_path_pattern,bkgd_train_path_pattern,arch_ID,config_array,files,num_files,newpath,regularizer)

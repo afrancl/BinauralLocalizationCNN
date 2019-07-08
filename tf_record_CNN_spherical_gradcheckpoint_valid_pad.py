@@ -28,7 +28,7 @@ def gradients_memory(ys, xs, grad_ys=None, **kwargs):
     return memory_saving_gradients.gradients(ys, xs, grad_ys, checkpoints='memory', **kwargs)
 gradients.__dict__["gradients"] = memory_saving_gradients.gradients_speed
 
-def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq_label,sam_tones,transposed_tones,precedence_effect,narrowband_noise,all_positions_bkgd,background_textures,testing,branched,zero_padded,stacked_channel,model_version,num_epochs,train_path_pattern,bkgd_train_path_pattern,arch_ID,config_array,files,num_files,newpath):
+def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq_label,sam_tones,transposed_tones,precedence_effect,narrowband_noise,all_positions_bkgd,background_textures,testing,branched,zero_padded,stacked_channel,model_version,num_epochs,train_path_pattern,bkgd_train_path_pattern,arch_ID,config_array,files,num_files,newpath,regularizer):
 
     bkgd_training_paths = glob.glob(bkgd_train_path_pattern)
     training_paths = glob.glob(train_path_pattern)
@@ -480,11 +480,13 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
     #branched = False
     net=NetBuilder()
     if branched:
-        out,out2=net.build(config_array,new_sig_nonlin,training_state,dropout_training_state,filter_dtype,padding,n_classes_localization,n_classes_recognition,branched)
+        out,out2=net.build(config_array,new_sig_nonlin,training_state,dropout_training_state,filter_dtype,padding,n_classes_localization,n_classes_recognition,branched,regularizer)
     else:
-        out=net.build(config_array,new_sig_nonlin,training_state,dropout_training_state,filter_dtype,padding,n_classes_localization,n_classes_recognition,branched)
+        out=net.build(config_array,new_sig_nonlin,training_state,dropout_training_state,filter_dtype,padding,n_classes_localization,n_classes_recognition,branched,regularizer)
     
-    
+    if regularizer is not None:
+        reg_term=tf.contrib.layers.apply_regularization(regularizer,(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)))
+
     combined_dict = collections.OrderedDict()
     combined_dict_fg = collections.OrderedDict()
     combined_dict_bkgd = collections.OrderedDict()
@@ -533,7 +535,9 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
     else:
         cost = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=out,labels=labels_batch_cost_sphere))
     
-    
+    if regularizer is not None:
+        cost=tf.add(cost,reg_term)
+
     #cost = tf.Print(cost, [labels],message="\nLabel:",summarize=32)
 
     cond_dist = tf.nn.softmax(out)
@@ -619,7 +623,12 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                  try:
                      if step ==1:
                          if not num_files == 1:
-                             latest_addition = max(files, key=os.path.getctime)
+                             #latest_addition = max(files, key=os.path.getctime)
+                             file_list=[]
+                             for elem in files:
+                                 if (elem.split("/")[-1]).split(".")[0] == 'model':
+                                     file_list.append(elem)
+                             latest_addition = max(file_list, key=os.path.getctime)
                              latest_addition_name = latest_addition.split(".") [1]
                              saver.restore(sess,newpath+"/model."+latest_addition_name)
                              step=int(latest_addition_name.split("-") [1])
@@ -646,7 +655,7 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                      print("Checkpoint Complete")
  
                  #Just for testing the model/call_model
-                 if step == 200000:
+                 if step == 250000:
                      print("Break!")
                      break
                  step += 1
@@ -740,7 +749,10 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                             json.dump(acc_accuracy2,f)
                 elif (sam_tones or transposed_tones or 
                       precedence_effect or narrowband_noise):
-                    stimuli_name = train_path_pattern.split("/")[-2]
+                    if train_path_pattern.split("/")[-2] == 'testset':
+                        stimuli_name = 'testset_'+train_path_pattern.split("/")[-3]
+                    else:
+                        stimuli_name = train_path_pattern.split("/")[-2]
                     np.save(newpath+'/batch_array_{}_iter{}.npy'.format(stimuli_name,stim),batch_acc)
                     np.save(newpath+'/batch_conditional_{}_iter{}.npy'.format(stimuli_name,stim),batch_conditional)
                     acc_corr=[pred[0] for pred in batch_acc]
@@ -758,7 +770,10 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                         json.dump(eval_keys,f)
 
                 else:
-                    stimuli_name = train_path_pattern.split("/")[-2]
+                    if train_path_pattern.split("/")[-2] == 'testset':
+                        stimuli_name = 'testset_'+train_path_pattern.split("/")[-3]
+                    else:
+                        stimuli_name = train_path_pattern.split("/")[-2]
                     np.save(newpath+'/plot_array_padded_{}_iter{}.npy'.format(stimuli_name,stim),batch_acc)
                     np.save(newpath+'/batch_conditional_{}_iter{}.npy'.format(stimuli_name,stim),batch_conditional)
                     acc_corr=[pred[0] for pred in batch_acc]
