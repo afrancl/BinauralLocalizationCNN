@@ -41,13 +41,13 @@ num_epochs=None
 
 
 arch_ID=int(sys.argv[1])
-#arch_ID=518
-init = 0
-bkgd_train_path_pattern = str(sys.argv[2])
-train_path_pattern = str(sys.argv[3])
+init = int(sys.argv[2])
+regularizer=str(sys.argv[3])
+exec("regularizer = "+ regularizer)
+bkgd_train_path_pattern = str(sys.argv[4])
+train_path_pattern = str(sys.argv[5])
 model_version=[]
-model_version = list(map(int,list((str(sys.argv[4]).split(',')))))
-regularizer=None
+model_version = list(map(int,list((str(sys.argv[6]).split(',')))))
 
 #newpath='/om2/user/francl/localization_runs/old_hrirs_no_hanning_window_valid_padding/arch_number_'+str(arch_ID)+'_init_'+str(init)
 if regularizer is None:

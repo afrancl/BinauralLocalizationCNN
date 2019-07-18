@@ -655,7 +655,7 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                      print("Checkpoint Complete")
  
                  #Just for testing the model/call_model
-                 if step == 250000:
+                 if step == 200000:
                      print("Break!")
                      break
                  step += 1

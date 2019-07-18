@@ -30,11 +30,11 @@ num_epochs=None
 #train_path_pattern = '/nobackup/scratch/Wed/francl/stimRecords_convolved_oldHRIRdist140_no_hanning_stackedCH_upsampled/train*.tfrecords'
 
 arch_ID=int(sys.argv[1])
-#arch_ID=518
-init = 0
-bkgd_train_path_pattern = str(sys.argv[2])
-train_path_pattern = str(sys.argv[3])
-regularizer=tf.contrib.layers.l1_regularizer(scale=0.001)
+init = int(sys.argv[2])
+regularizer = str(sys.argv[3])
+exec("regularizer = "+ regularizer)
+bkgd_train_path_pattern = str(sys.argv[4])
+train_path_pattern = str(sys.argv[5])
 
 if regularizer is None:
     newpath='/om2/user/gahlm/dataset_pipeline_test/arch_number_'+str(arch_ID)+'_init_'+str(init)
