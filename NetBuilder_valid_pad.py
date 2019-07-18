@@ -10,7 +10,7 @@ class NetBuilder:
         self.layer_out1=0
         self.layer_out2=0
     
-    def build(self,config_array,subbands_batch,training_state,dropout_training_state,filter_dtype,padding,n_classes_localization,n_classes_recognition,branched):
+    def build(self,config_array,subbands_batch,training_state,dropout_training_state,filter_dtype,padding,n_classes_localization,n_classes_recognition,branched,regularizer):
 
 #      config_array=[[["/gpu:0"],['conv',[2,50,32],[1,4]],['relu'],['pool',[1,4]]],[["/gpu:1"],['conv',[4,20,64],[1,1]],['bn'],['relu'],['pool',[1,4]],['conv',[8,8,128],[1,1]],['bn'],['relu'],['pool',[1,4]],['conv',[8,8,256],[1,1]],['bn'],['relu'],['pool',[1,8]],['conv',[8,8,512],[1,1]],['bn'],['relu'],['pool',[2,2]]],[["/gpu:2"],['fc',512],['fc_bn'],['fc_relu'],['dropout'],['out']]]
 
@@ -45,7 +45,7 @@ class NetBuilder:
                             stride_size = [1,element[2][0],element[2][1],1]
                             filter_height = kernel_size[0]
                             in_height = int(size[1])
-                            weight=tf.get_variable("wc_{}".format(self.layer),kernel_size,filter_dtype)
+                            weight=tf.get_variable("wc_{}".format(self.layer),kernel_size,filter_dtype,regularizer=regularizer)
                             bias=tf.get_variable("wb_{}".format(self.layer),element[1][2],filter_dtype)
                             if (in_height % stride_size[1] == 0):
                                 pad_along_height = max(filter_height -stride_size[1], 0)
@@ -83,7 +83,7 @@ class NetBuilder:
                         
                         elif element[0]=='fc':
                             dim=self.input.get_shape()
-                            wd1=tf.get_variable("wc_fc_{}".format(self.layer_fc),[dim[3]*dim[1]*dim[2],element[1]],filter_dtype)
+                            wd1=tf.get_variable("wc_fc_{}".format(self.layer_fc),[dim[3]*dim[1]*dim[2],element[1]],filter_dtype,regularizer=regularizer)
                             dense_bias1=tf.get_variable("wb_fc_{}".format(self.layer_fc1),element[1],filter_dtype)
                             pool_flat=tf.reshape(self.input,[-1,wd1.get_shape().as_list()[0]])
                             fc1=tf.add(tf.matmul(pool_flat,wd1),dense_bias1)
@@ -110,7 +110,7 @@ class NetBuilder:
                    
                         elif element[0]=='out':
                             dim_1=self.input.get_shape()
-                            w_out=tf.get_variable("wc_out_{}".format(self.layer_out),[dim_1[1],n_classes_localization],filter_dtype)
+                            w_out=tf.get_variable("wc_out_{}".format(self.layer_out),[dim_1[1],n_classes_localization],filter_dtype,regularizer=regularizer)
                             b_out=tf.get_variable("wb_out_{}".format(self.layer_out),[n_classes_localization],filter_dtype)
                             out=tf.add(tf.matmul(self.input,w_out),b_out)
                             self.input=tf.cast(out,tf.float32)
