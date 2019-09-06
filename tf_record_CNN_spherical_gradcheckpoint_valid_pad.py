@@ -18,6 +18,10 @@ from google.protobuf.json_format import MessageToJson
 from parse_nested_dictionary import parse_nested_dictionary
 import collections
 import scipy.signal as signallib
+from pycochleagram import erbfilter as erb
+from pycochleagram import subband as sb
+from scipy.io.wavfile import write
+
 
 import memory_saving_gradients
 from tensorflow.python.ops import gradients
@@ -610,6 +614,40 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
 #     #from tensorflow.python.client import timeline
 #     #trace = timeline.Timeline(step_stats=run_metadata.step_stats)
 #     #trace_file.close()
+
+#Used to write out stimuli examples
+
+    low_lim=30
+    hi_lim=20000
+    sr=48000
+    sample_factor=1
+    scale = 0.1
+    i=0
+    pad_factor = None
+    #invert subbands
+    n = int(np.floor(erb.freq2erb(hi_lim) - erb.freq2erb(low_lim)) - 1)
+    sess.run(combined_iter.initializer)
+    subbands_test,az_label,elev_label = sess.run([combined_iter_dict[0]['train/image'],combined_iter_dict[0]['train/azim'],combined_iter_dict[0]['train/elev']])
+
+    filts, hz_cutoffs, freqs=erb.make_erb_cos_filters_nx(subbands_test.shape[2],sr, n,low_lim,hi_lim, sample_factor,pad_factor=pad_factor,full_filter=True)
+
+    filts_no_edges = filts[1:-1]
+    for batch_iter in range(3):
+        for stim_iter in range(16):
+            subbands_l=subbands_test[stim_iter,:,:,0]
+            subbands_r=subbands_test[stim_iter,:,:,1]
+            wavs = np.zeros([subbands_test.shape[2],2])
+            wavs[:,0] = sb.collapse_subbands(subbands_l,filts_no_edges).astype(np.float32)
+            wavs[:,1] = sb.collapse_subbands(subbands_r,filts_no_edges).astype(np.float32)
+            max_val = wavs.max()
+            rescaled_wav = wavs/max_val*scale
+            name = "stim_{}_{}az_{}elev.wav".format(stim_iter+batch_iter*16,int(az_label[stim_iter])*5,int(elev_label[stim_iter])*5)
+            name_with_path = newpath+'/'+name
+            write(name_with_path,sr,rescaled_wav)
+        pdb.set_trace()
+        subbands_test,az_label,elev_label = sess.run([combined_iter_dict[0]['train/image'],combined_iter_dict[0]['train/azim'],combined_iter_dict[0]['train/elev']])
+
+
     if not testing:
         sess.run(combined_iter.initializer)
         saver = tf.train.Saver(max_to_keep=None)
