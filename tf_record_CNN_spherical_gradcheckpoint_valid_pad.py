@@ -32,7 +32,7 @@ def gradients_memory(ys, xs, grad_ys=None, **kwargs):
     return memory_saving_gradients.gradients(ys, xs, grad_ys, checkpoints='memory', **kwargs)
 gradients.__dict__["gradients"] = memory_saving_gradients.gradients_speed
 
-def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq_label,sam_tones,transposed_tones,precedence_effect,narrowband_noise,all_positions_bkgd,background_textures,testing,branched,zero_padded,stacked_channel,model_version,num_epochs,train_path_pattern,bkgd_train_path_pattern,arch_ID,config_array,files,num_files,newpath,regularizer):
+def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq_label,sam_tones,transposed_tones,precedence_effect,narrowband_noise,all_positions_bkgd,background_textures,testing,branched,zero_padded,stacked_channel,model_version,num_epochs,train_path_pattern,bkgd_train_path_pattern,arch_ID,config_array,files,num_files,newpath,regularizer,SNR_max=40,SNR_min=5):
 
     bkgd_training_paths = glob.glob(bkgd_train_path_pattern)
     training_paths = glob.glob(train_path_pattern)
@@ -49,8 +49,6 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
     if stacked_channel:
         STIM_SIZE = [39,48000, 2]
         BKGD_SIZE = [39,48000,2]
-    SNR_max = 40
-    SNR_min = 5
     n_classes_localization=504
     n_classes_recognition=780
     localization_bin_resolution=5
@@ -90,8 +88,11 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
         dropout_training_state = False
         training_state= False
         num_epochs = 1
-        SNR_max = 35.0
-        SNR_min = 30.0
+        #Using these values because 5/40 are the standard training SNRs
+        if not (SNR_min > 30 or SNR_max > 40):
+            SNR_max = 35.0
+            SNR_min = 30.0
+        print("Testing SNR(dB): Max: "+str(SNR_max)+"Min: "+str(SNR_min))
 
 
     #mean_subbands = np.load("mean_subband_51400.npy")/51400
@@ -615,37 +616,37 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
 #     #trace = timeline.Timeline(step_stats=run_metadata.step_stats)
 #     #trace_file.close()
 
-#Used to write out stimuli examples
-
-    low_lim=30
-    hi_lim=20000
-    sr=48000
-    sample_factor=1
-    scale = 0.1
-    i=0
-    pad_factor = None
-    #invert subbands
-    n = int(np.floor(erb.freq2erb(hi_lim) - erb.freq2erb(low_lim)) - 1)
-    sess.run(combined_iter.initializer)
-    subbands_test,az_label,elev_label = sess.run([combined_iter_dict[0]['train/image'],combined_iter_dict[0]['train/azim'],combined_iter_dict[0]['train/elev']])
-
-    filts, hz_cutoffs, freqs=erb.make_erb_cos_filters_nx(subbands_test.shape[2],sr, n,low_lim,hi_lim, sample_factor,pad_factor=pad_factor,full_filter=True)
-
-    filts_no_edges = filts[1:-1]
-    for batch_iter in range(3):
-        for stim_iter in range(16):
-            subbands_l=subbands_test[stim_iter,:,:,0]
-            subbands_r=subbands_test[stim_iter,:,:,1]
-            wavs = np.zeros([subbands_test.shape[2],2])
-            wavs[:,0] = sb.collapse_subbands(subbands_l,filts_no_edges).astype(np.float32)
-            wavs[:,1] = sb.collapse_subbands(subbands_r,filts_no_edges).astype(np.float32)
-            max_val = wavs.max()
-            rescaled_wav = wavs/max_val*scale
-            name = "stim_{}_{}az_{}elev.wav".format(stim_iter+batch_iter*16,int(az_label[stim_iter])*5,int(elev_label[stim_iter])*5)
-            name_with_path = newpath+'/'+name
-            write(name_with_path,sr,rescaled_wav)
-        pdb.set_trace()
-        subbands_test,az_label,elev_label = sess.run([combined_iter_dict[0]['train/image'],combined_iter_dict[0]['train/azim'],combined_iter_dict[0]['train/elev']])
+##Used to write out stimuli examples
+#
+#    low_lim=30
+#    hi_lim=20000
+#    sr=48000
+#    sample_factor=1
+#    scale = 0.1
+#    i=0
+#    pad_factor = None
+#    #invert subbands
+#    n = int(np.floor(erb.freq2erb(hi_lim) - erb.freq2erb(low_lim)) - 1)
+#    sess.run(combined_iter.initializer)
+#    subbands_test,az_label,elev_label = sess.run([combined_iter_dict[0]['train/image'],combined_iter_dict[0]['train/azim'],combined_iter_dict[0]['train/elev']])
+#
+#    filts, hz_cutoffs, freqs=erb.make_erb_cos_filters_nx(subbands_test.shape[2],sr, n,low_lim,hi_lim, sample_factor,pad_factor=pad_factor,full_filter=True)
+#
+#    filts_no_edges = filts[1:-1]
+#    for batch_iter in range(3):
+#        for stim_iter in range(16):
+#            subbands_l=subbands_test[stim_iter,:,:,0]
+#            subbands_r=subbands_test[stim_iter,:,:,1]
+#            wavs = np.zeros([subbands_test.shape[2],2])
+#            wavs[:,0] = sb.collapse_subbands(subbands_l,filts_no_edges).astype(np.float32)
+#            wavs[:,1] = sb.collapse_subbands(subbands_r,filts_no_edges).astype(np.float32)
+#            max_val = wavs.max()
+#            rescaled_wav = wavs/max_val*scale
+#            name = "stim_{}_{}az_{}elev.wav".format(stim_iter+batch_iter*16,int(az_label[stim_iter])*5,int(elev_label[stim_iter])*5)
+#            name_with_path = newpath+'/'+name
+#            write(name_with_path,sr,rescaled_wav)
+#        pdb.set_trace()
+#        subbands_test,az_label,elev_label = sess.run([combined_iter_dict[0]['train/image'],combined_iter_dict[0]['train/azim'],combined_iter_dict[0]['train/elev']])
 
 
     if not testing:
@@ -758,7 +759,7 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                         print("Iter "+str(step*batch_size))
                         #if not tone_version:
                         #    print("Current Accuracy:",sum(batch_acc)/len(batch_acc))
-                    if step == 65000:
+                    if step == 500000:
                         print ("Break!")
                         break
             except tf.errors.ResourceExhaustedError:
