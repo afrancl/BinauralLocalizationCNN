@@ -32,6 +32,22 @@ def gradients_memory(ys, xs, grad_ys=None, **kwargs):
     return memory_saving_gradients.gradients(ys, xs, grad_ys, checkpoints='memory', **kwargs)
 gradients.__dict__["gradients"] = memory_saving_gradients.gradients_speed
 
+def write_batch_data(newpath,train_path_pattern,stim,batch_acc,
+                     batch_conditional,eval_keys,counter):
+    if train_path_pattern.split("/")[-2] == 'testset':
+        stimuli_name = 'testset_'+train_path_pattern.split("/")[-3]
+    else:
+        stimuli_name = train_path_pattern.split("/")[-2]
+    np.save(newpath+'/plot_array_padded_{}_count{}_iter{}.npy'.format(stimuli_name,counter,stim),batch_acc)
+    np.save(newpath+'/batch_conditional_{}_count_{}_iter{}.npy'.format(stimuli_name,counter,stim),batch_conditional)
+    acc_corr=[pred[0] for pred in batch_acc]
+    acc_accuracy=sum(acc_corr)/len(acc_corr)
+    with open(newpath+'/accuracies_test_{}_count{}_iter{}.json'.format(stimuli_name,counter,stim),'w') as f:
+        json.dump(acc_accuracy,f)
+    with open(newpath+'/keys_test_{}_iter{}.json'.format(stimuli_name,stim),'w') as f:
+        json.dump(eval_keys,f)
+
+
 def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq_label,sam_tones,transposed_tones,precedence_effect,narrowband_noise,all_positions_bkgd,background_textures,testing,branched,zero_padded,stacked_channel,model_version,num_epochs,train_path_pattern,bkgd_train_path_pattern,arch_ID,config_array,files,num_files,newpath,regularizer,SNR_max=40,SNR_min=5):
 
     bkgd_training_paths = glob.glob(bkgd_train_path_pattern)
@@ -76,6 +92,9 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
 
     #Display interval training statistics
     display_step = 25
+    #Changes how often data is saved to numpy arrays when dataset is large
+    write_step = 15625 #250k examples
+    #write_step = 25 #250k examples
 
     if itd_tones:
         TONE_SIZE = ITD_TONE_SIZE
@@ -668,7 +687,7 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                                  if (elem.split("/")[-1]).split(".")[0] == 'model':
                                      file_list.append(elem)
                              latest_addition = max(file_list, key=os.path.getctime)
-                             latest_addition_name = latest_addition.split(".") [1]
+                             latest_addition_name = latest_addition.split(".") [-2]
                              saver.restore(sess,newpath+"/model."+latest_addition_name)
                              step=int(latest_addition_name.split("-") [1])
                          else:
@@ -689,12 +708,23 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                            "{:.5f}".format(acc))
                  if step%5000 ==0:
                      print("Checkpointing Model...")
-                     saver.save(sess,newpath+'/model.ckpt',global_step=step,write_meta_graph=False)
+                     retry_count = 0
+                     while True:
+                         try:
+                             saver.save(sess,newpath+'/model.ckpt',global_step=step,write_meta_graph=False)
+                             break
+                         except ValueError as e:
+                             if retry_count > 36:
+                                 print("Maximum wait time reached(6H). Terminating Program.")
+                                 raise e from None
+                             print("Checkpointing failed. Retrying in 10 minutes...")
+                             time.sleep(600)
+                             retry_count+=1
                      learning_curve.append([int(step*batch_size),float(acc)])
                      print("Checkpoint Complete")
  
                  #Just for testing the model/call_model
-                 if step == 200000:
+                 if step == 300000:
                      print("Break!")
                      break
                  step += 1
@@ -739,11 +769,16 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                 while True:
                     pred, cd, e_vars = sess.run([correct_pred, cond_dist, eval_vars])
                     array_len = len(e_vars)
-                    e_vars = np.array([np.squeeze(x) for x in e_vars])
-                    split = np.vsplit(e_vars,array_len)
-                    batch_conditional += [(cond,var) for cond, var in zip(cd,e_vars.T)]
-                    split.insert(0,pred)
-                    batch_acc += np.dstack(split).tolist()[0]
+                    if isinstance(e_vars,list):
+                       e_vars = list(zip(*e_vars))
+                       batch_conditional +=  [(cond,var) for cond, var in zip(cd,e_vars)]
+                       batch_acc += [(pd,ev) for pd,ev in zip(pred,e_vars)]
+                    else:
+                        e_vars = np.array([np.squeeze(x) for x in e_vars])
+                        split = np.vsplit(e_vars,array_len)
+                        batch_conditional += [(cond,var) for cond, var in zip(cd,e_vars.T)]
+                        split.insert(0,pred)
+                        batch_acc += np.dstack(split).tolist()[0]
 
                     if branched:
                         pred2, cd2, e_vars2 = sess.run(correct_pred2,cond_dist2,eval_vars)
@@ -759,6 +794,13 @@ def tf_record_CNN_spherical(tone_version,itd_tones,ild_tones,manually_added,freq
                         print("Iter "+str(step*batch_size))
                         #if not tone_version:
                         #    print("Current Accuracy:",sum(batch_acc)/len(batch_acc))
+                    if (step+1) % write_step ==0:
+                        print("writing batch data at step: {}".format(step))
+                        write_batch_data(newpath,train_path_pattern,stim,
+                                        batch_acc,batch_conditional,eval_keys,step)
+                        print("Data written")
+                        batch_acc = []
+                        batch_conditional = []
                     if step == 500000:
                         print ("Break!")
                         break

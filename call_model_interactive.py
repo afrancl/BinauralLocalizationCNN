@@ -10,15 +10,15 @@ tone_version=False
 itd_tones=False
 ild_tones=False
 #divide azim/elev label by 10 if false
-manually_added=True
-all_positions_bkgd=False
-background_textures = True
-testing=True
+manually_added=False
+all_positions_bkgd=True
+background_textures = False
+testing = False
 #Sends Net builder signals to create a branched network, calculates both
 #localization and recognition loss
-branched=False
+branched = False
 #Sets stim size to 30000 in length
-zero_padded=True
+zero_padded = True
 #Parses record expecting frequency label if True
 freq_label = False
 #Parses SAM tones and associated labels
@@ -30,7 +30,7 @@ precedence_effect = False
 #Parses narrowband noise for pyschoacoustic experiments
 narrowband_noise = False
 #Parses record expecting [N,M,2] format instead of interleaved [2N,M] format if True
-stacked_channel = True 
+stacked_channel = True
 
 #model_version=85000
 num_epochs=None
@@ -40,20 +40,44 @@ num_epochs=None
 #train_path_pattern ='/nobackup/scratch/Sat/francl/stimRecords_convolved_oldHRIRdist140_no_hanning_stackedCH_upsampled/testset/train*.tfrecords'
 
 
-arch_ID=int(sys.argv[1])
-init = int(sys.argv[2])
-regularizer=str(sys.argv[3])
-exec("regularizer = "+ regularizer)
-bkgd_train_path_pattern = str(sys.argv[4])
-train_path_pattern = str(sys.argv[5])
-model_version=[]
-model_version = list(map(int,list((str(sys.argv[6]).split(',')))))
+#arch_ID=int(sys.argv[1])
+#init = int(sys.argv[2])
+#regularizer=str(sys.argv[3])
+#exec("regularizer = "+ regularizer)
+#bkgd_train_path_pattern = str(sys.argv[4])
+#train_path_pattern = str(sys.argv[5])
+#model_version=[]
+#model_version = list(map(int,list((str(sys.argv[6]).split(',')))))
+
+arch_ID = 193
+init=0
+#regularizer="tf.contrib.layers.l1_regularizer(scale=0.001)"
+regularizer=None
+bkgd_train_path_pattern='/om/scratch/Sat/francl/bkgdRecords_textures_sparse_sampled_same_texture_expanded_set_44.1kHz_stackedCH_upsampled/train*.tfrecords'
+train_path_pattern='/nobackup/scratch/Sat/francl/stimRecords_convolved_oldHRIRdist140_no_hanning_stackedCH_upsampled/train*.tfrecords'
+model_version=[85000]
+
+#arch_ID=0
+#init = 0
+#regularizer=None
+#bkgd_train_path_pattern = str(sys.argv[4])
+#bkgd_train_path_pattern='/nobackup/scratch/Wed/francl/bkgdRecords_pinknoise_oldHRIRs140_10mshann/train0.tfrecords'
+#train_path_pattern='/nobackup/scratch/Wed/francl/samToneRecords_fulllengthTime_jitteredCarrier_jitterSlice/train0.tfrecords'
+#train_path_pattern = str(sys.argv[5])
+#model_version=[85000]
+#model_version = list(map(int,list((str(sys.argv[6]).split(',')))))
+#init=0
+#regularizer=None
+#bkgd_train_path_pattern='/nobackup/scratch/Wed/francl/bkgdRecords_pinknoise_oldHRIRs140_10mshann/train*.tfrecords'
+#train_path_pattern='/nobackup/scratch/Wed/francl/samToneRecords_fulllengthTime_jitteredCarrier_jitterSlice/train*.tfrecords'
+#model_version=85000
+
 
 #newpath='/om2/user/francl/localization_runs/old_hrirs_no_hanning_window_valid_padding/arch_number_'+str(arch_ID)+'_init_'+str(init)
 if regularizer is None:
-    newpath='/om2/user/francl/new_task_archs/new_task_archs_anechoic_training/arch_number_'+str(arch_ID)+'_init_'+str(init)
+    newpath='/om2/user/gahlm/dataset_pipeline_test/arch_number_'+str(arch_ID)+'_init_'+str(init)
 else:
-    newpath='/om2/user/francl/new_task_archs/new_task_archs_anechoic_training/arch_number_'+str(arch_ID)+'_init_'+str(init)+'_reg'
+    newpath='/om2/user/gahlm/dataset_pipeline_test/arch_number_'+str(arch_ID)+'_init_'+str(init)+'_reg'
 
 if not os.path.exists(newpath):
     os.mkdir(newpath)

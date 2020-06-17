@@ -5,7 +5,6 @@ os.environ['TF_CUDNN_USE_AUTOTUNE']='0'
 import numpy as np
 import tensorflow as tf
 import glob
-import pdb
 import collections
 
 def build_tfrecords_iterator(num_epochs, train_path_pattern, is_bkgd, feature_parsing_dict, narrowband_noise, manually_added, STIM_SIZE, localization_bin_resolution,stacked_channel):
@@ -52,6 +51,7 @@ def build_tfrecords_iterator(num_epochs, train_path_pattern, is_bkgd, feature_pa
         else:
             path_dtype = feature_parsing_dict[path].dtype
             path_shape = feature_parsing_dict[path].shape
+            if len(path_shape) > 0: path_dtype = tf.string
             feature_dict[path] = tf.FixedLenFeature(path_shape, path_dtype)
 
     ### Define the tfrecords parsing function
@@ -210,10 +210,7 @@ def build_tfrecords_iterator(num_epochs, train_path_pattern, is_bkgd, feature_pa
     dataset = dataset.apply(tf.contrib.data.parallel_interleave(lambda x:tf.data.TFRecordDataset(x,compression_type="GZIP").map(parse_tfrecord_example,num_parallel_calls=1),cycle_length=10, block_length=16))
 #    print (dataset)
     dataset = dataset.shuffle(buffer_size=200)
-    if not is_bkgd:
-        dataset = dataset.repeat(num_epochs)
-    else:
-        dataset = dataset.repeat()
+    dataset = dataset.repeat(num_epochs)
     dataset = dataset.prefetch(100)
 
     return dataset

@@ -3,6 +3,7 @@ import sys
 import numpy as np
 import tensorflow as tf
 import collections
+import pdb
 
 def parse_nested_dictionary(jsdict,is_bkgd):
 #    feature = {}
@@ -30,7 +31,8 @@ def parse_nested_dictionary(jsdict,is_bkgd):
 #                        vals = v[x][y].values()
 #                        for z in vals:
 #                            width = int(z[0])
-                shape = []
+                feature_len = len(v[x][y]['value'])
+                shape = [] if feature_len == 1 else [feature_len]
                 if is_bkgd is True and (x == 'train/azim' or x == 'train/elev'):
                     feature[x] = tf.VarLenFeature(dtype)
                 else:

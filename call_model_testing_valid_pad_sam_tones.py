@@ -22,7 +22,7 @@ zero_padded=True
 #Parses record expecting frequency label if True
 freq_label = False
 #Parses SAM tones and associated labels
-sam_tones = False
+sam_tones = True
 #Parses transposed tones and associated labels
 transposed_tones = False
 #Parses spatialized clickas and associated labels for precedence effect
@@ -51,9 +51,9 @@ model_version = list(map(int,list((str(sys.argv[6]).split(',')))))
 
 #newpath='/om2/user/francl/localization_runs/old_hrirs_no_hanning_window_valid_padding/arch_number_'+str(arch_ID)+'_init_'+str(init)
 if regularizer is None:
-    newpath='/om2/user/francl/new_task_archs/new_task_archs_anechoic_training/arch_number_'+str(arch_ID)+'_init_'+str(init)
+    newpath='/om2/user/gahlm/dataset_pipeline_test/arch_number_'+str(arch_ID)+'_init_'+str(init)
 else:
-    newpath='/om2/user/francl/new_task_archs/new_task_archs_anechoic_training/arch_number_'+str(arch_ID)+'_init_'+str(init)+'_reg'
+    newpath='/om2/user/gahlm/dataset_pipeline_test/arch_number_'+str(arch_ID)+'_init_'+str(init)+'_reg'
 
 if not os.path.exists(newpath):
     os.mkdir(newpath)
