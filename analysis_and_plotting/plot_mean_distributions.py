@@ -4,6 +4,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import bootstrapped.bootstrap as bs
+
 import bootstrapped.stats_functions as bs_stats
 import math
 import os
@@ -130,12 +131,30 @@ def bootstrap_pandas_by_group(group):
 
 def azim_error_row(row):
     '''
-    Calculates distance between labeled azimutha and predicted azimuth. Check
+    Calculates distance between labeled azimuth and predicted azimuth. Check
     distance both directions around circle and returns smaller one.
     '''
     azim = row['azim']
     pred = row['predicted_azim']
     return min(72-(abs(azim-pred)),abs(azim-pred))
+
+def azim_offset_row(row):
+    '''
+    Calculates distance between reference source and target source. Check
+    distance both directions around circle and returns smaller one.
+    '''
+    target = row['target_azim']
+    reference = row['reference_azim']
+    normal_distance = target - reference
+    target_left_of_reference_counterclockwise = True if target > reference else False
+    counterclockwise_distance = 360 - abs(target - reference)
+    if abs(normal_distance) < counterclockwise_distance:
+        return normal_distance
+    else:
+        if target_left_of_reference_counterclockwise: return -1*counterclockwise_distance
+        return counterclockwise_distance
+    return min(72-(abs(azim-pred)),abs(azim-pred))
+
 
 def getDatafilenames(regex):
     '''
@@ -147,7 +166,7 @@ def getDatafilenames(regex):
     np_data_list = []
     for fname in fnames:
         #Gets key list with same name as numpy array
-        keylist_regex = fname.replace("batch_conditional","keys_test").replace(".npy","")+"*"
+        keylist_regex = fname.replace("batch_conditional","keys_test").replace(".npy",".json")
         #This is to filter for the very large outputs broken into
         #different numpy arrays. It maps them all to the same key list.
         keylist_regex = re.sub("_count_\d+_","_",keylist_regex)
@@ -167,7 +186,10 @@ def getDatafilenames(regex):
                     warnings.warn(message, UserWarning)
         print(fname)
         temp_array = np.load(fname,allow_pickle=True)
-        reshaped_array = reshape_and_filter(temp_array,label_order)
+        if "multi_source" in regex:
+            reshaped_array = multi_source_reshape_and_filter(temp_array,label_order)
+        else:
+            reshaped_array = reshape_and_filter(temp_array,label_order)
         np_data_list.append(reshaped_array)
     return np_data_list
 
@@ -225,6 +247,38 @@ def make_dataframe(regex,fold_data=False,elevation_predictions=False,recenter_fo
         main_df['predicted_folded'] = main_df.apply(add_fold_offset, axis=1)
     return main_df
 
+def make_dataframe_full_pred_vector(regex):
+    np_data_array = getDatafilenames(regex)
+    cols = get_cols(regex)
+    arch_indecies,init_indices = get_arch_indicies(regex)
+    cols = ['predicted'] + cols + ['arch_index','init_index']
+    for arch_index,init_index,np_data in zip(arch_indecies,init_indices,np_data_array):
+        np_arch_val = np.full((np_data.shape[0],1),arch_index)
+        np_init_val = np.full((np_data.shape[0],1),init_index)
+        pred = np.array([x for x in np_data[:,0]])
+        np_data[:,0] = pred.tolist()
+        np_full_data = np.hstack((np_data,np_arch_val,np_init_val))
+        df = pd.DataFrame(data=np_full_data,columns=cols)
+        main_df = df if 'main_df' not in locals() else pd.concat([main_df,df]).reset_index(drop=True)
+    return main_df
+
+
+def make_dataframe_multi_source(regex):
+    np_data_array = getDatafilenames(regex)
+    cols = get_cols(regex)
+    arch_indecies,init_indices = get_arch_indicies(regex)
+    cols = ['predicted'] + cols + ['arch_index','init_index']
+    for arch_index,init_index,np_data in zip(arch_indecies,init_indices,np_data_array):
+        np_arch_val = np.full((np_data.shape[0],1),arch_index)
+        np_init_val = np.full((np_data.shape[0],1),init_index)
+        full_pred = np.array([x for x in np_data[:,0]])
+        full_pred_list = full_pred.tolist()
+        np_data[:,0] = full_pred.argmax(axis=1)
+        np_full_data = np.hstack((np_data,np_arch_val,np_init_val))
+        df = pd.DataFrame(data=np_full_data,columns=cols)
+        df['predicted'] = full_pred_list
+        main_df = df if 'main_df' not in locals() else pd.concat([main_df,df]).reset_index(drop=True)
+    return main_df
 
 def dataframe_from_pickle(filename):
     with open(filename, "rb") as f:
@@ -284,18 +338,38 @@ def get_cols(regex):
     elif "nsynth" in regex:
         var_order = ["azim","elev","room_geometry", "instrument_source_str", "room_materials", "sample_rate", "qualities", "filename", "instrument_family_str", "pitch", "note_str", "velocity", "instrument", "instrument_family", "note", "instrument_str", "instrument_source", "head_location"]
     elif "bandpass" in regex:
-        var_order = ["azim","elev", "bandwidth",
-                     "center_freq"]
+        var_order = ["azim","elev", "bandwidth","center_freq"]
     elif ("binaural_recorded" in regex) and ("speech_label" in regex):
         var_order = ["azim", "elev","speech"]
     elif "binaural_recorded" in regex:
         var_order = ["azim", "elev"]
     elif ("testset" in regex) and ("convolved" in regex):
         var_order = ["azim", "elev"]
+    elif ("testset" in regex) and ("convolved" in regex or "multi_source" in
+                                   regex):
+        var_order = ["azim", "elev"]
+    elif "zhong_yost" in regex:
+        var_order = ["azim", "elev"]
+    elif "wood_bizley" in regex:
+        var_order = ["azim","elev","stim_idx","snr"]
+    elif ("hebrank_wright" in regex) or ("hebank_wright" in regex):
+        var_order = ["azim","elev","low_cutoff","high_cutoff","stim_idx"]
+    elif "roffler_butler" in regex:
+        var_order = ["azim","elev","bandwidth","center_freq","bin_freq"]
+    elif "best_carlile" in regex:
+        var_order = ["azim","elev"]
+    elif "rahul" in regex:
+        var_order = ["azim","elev","sound_id"]
+    elif "pavao" in regex:
+        var_order = ["azim","elev","stim_name"]
+    elif "spectral_modulation" in regex:
+        var_order = ["azim","elev","modulation_rate","stim_idx"]
+    elif "midline_elevation" in regex:
+        var_order = ["azim","elev","bandwidtth","center_freq"]
     else:
-        var_order = ["azim","freq"]
+        var_order = ["azim","elev"]
     return var_order
-        
+
 
 def get_order(regex,data):
     var_order = get_cols(regex)
@@ -306,8 +380,8 @@ def get_order(regex,data):
 def reshape_and_filter(temp_array,label_order):
     prob = np.vstack(temp_array[:,0])
     if all(isinstance(x,np.ndarray) for x in temp_array[:,1][0]):
-        #This deals with testsets metadata still in tuples because vstack
-        #dealts with things incorrectly if all elements are arrays
+        #This block handles datasets still in tuples becuase vstack
+        #processes things incorrectly in all elements are arrays
         metadata = np.array(pd.DataFrame({"meta":temp_array[:,1]})['meta']
                             .apply(lambda x:tuple([m[0] for m in x])).tolist())
     else:
@@ -327,6 +401,79 @@ def reshape_and_filter(temp_array,label_order):
     else:
         array = temp_array
     return array
+
+def multi_source_reshape_and_filter(temp_array,label_order):
+    prob = np.vstack(temp_array[:,0])
+    if all(isinstance(x,np.ndarray) for x in temp_array[:,1][0]):
+        #This deals with testsets metadata still in tuples because vstack
+        #dealts with things incorrectly if all elements are arrays
+        try:
+            metadata = np.array(pd.DataFrame({"meta":temp_array[:,1]})['meta']
+                                .apply(lambda x:tuple([m for m in x])).tolist())
+        except ValueError as e:
+            metadata =  np.apply_along_axis(lambda x :x.tolist(),axis=1,
+                                            arr=temp_array[:,1])
+            if len(metadata.shape) != 3: raise e
+
+    else:
+        metadata = np.vstack(temp_array[:,1])
+    #metadata_padded = pad_numpy_arrays_from_tuple(temp_array[:,1],fill_val=-1)
+    if len(label_order) != 0:
+        target_slice_arr = []
+        src_slice_arr = []
+        for src_idx,target_idx in enumerate(label_order):
+            if target_idx is not None:
+                target_slice_arr.append(target_idx)
+                src_slice_arr.append(src_idx)
+        slice_array = [idx for idx in label_order if idx is not None]
+        if len(metadata.shape) ==2:
+            metadata_new = np.empty((metadata.shape[0],len(src_slice_arr)),
+                                    dtype=metadata.dtype)
+        else:
+            metadata_new_shape = (metadata.shape[0] , len(src_slice_arr)) + metadata.shape[2:]
+            metadata_new = np.empty(metadata_new_shape,dtype=metadata.dtype)
+            metadata_new_shape = (metadata.shape[0] , len(src_slice_arr)) + metadata.shape[2:]
+            metadata_new = np.empty(metadata_new_shape,dtype=metadata.dtype)
+        metadata_new[:,target_slice_arr] = metadata[:,src_slice_arr]
+        array = np.empty((prob.shape[0],1+len(src_slice_arr)),object)
+        array[:] = [[prob,*labels] for prob,labels in zip(prob,metadata_new)]
+    else:
+        array = temp_array
+    return array
+
+
+def pad_numpy_arrays_from_tuple(data,fill_val):
+    '''
+    Function takes numpy array fillted with tuples of numpy arrays. The arrays
+    within a column in the tuples, may be ragged and this functtion padds them to the max
+    shape within the column using fill_val.
+
+    Parameters:
+        data (np-array) : Array (n,) object array filled with tuples.
+        fill_val (int/float) : Value used to fill padding in output array.
+    Return:
+        ret_array (np-array): Array (n,m,len) array where len is the max leghts of the list
+        and all data are padded in dimension 2 to the same length.
+    '''
+    #Stack data in numpy arrays
+    temp_vstack = [ np.vstack(row) for row in data]
+    final_dtype = temp_vstack[0].dtype
+
+    # Get lengths of each row of data
+    lens = np.array([row.shape[-1] for row in temp_vstack])
+
+    # Mask of valid places in each row
+    mask = np.arange(lens.max()) < lens[:,None]
+    out_mask = np.stack((mask,mask),axis=1)
+
+    output_shape = (len(temp_vstack),temp_vstack[0].shape[0],mask.shape[-1])
+
+    # Setup output array and put elements from data into masked positions
+    out = np.full(output_shape, fill_value=fill_val, dtype=final_dtype)
+    for  row_idx in range(len(temp_vstack)):
+        out[row_idx,out_mask[row_idx]] = temp_vstack[row_idx].flatten()
+
+    return out
 
 def allbut(*names):
     names = set(names)
@@ -516,7 +663,7 @@ def plot_means_squared_error(batch_conditionals_ordered,freqs,azim_lim=36,bins_5
     ax1.legend(loc=2)
 
 
-def make_bandwidth_vs_error_humabn_plot():
+def make_bandwidth_vs_error_humabn_plot(return_pd=False):
     pd_yost = pd.read_csv("/home/francl/Bandwidth_Data.csv",header=[0])
     #conver bandwidths in fractions to numeric values
     pd_yost['bandwidth'] = pd_yost['bandwidth'].apply(eval)
@@ -526,15 +673,14 @@ def make_bandwidth_vs_error_humabn_plot():
     pd_yost.iloc[16,1] = .001
     #dummy column needed to add point makers with seaborn
     pd_yost['same_val'] = 1
-    #Rename columns
     pd_yost.columns = ['frequency', 'Bandwidth (Octaves)', 'RMS Error (Degrees)',
                        'standard deviation', 'same_val']
     fig = plt.figure(figsize=(13,11))
     plt.clf()
     sns.lineplot(x='Bandwidth (Octaves)',y='RMS Error (Degrees)',hue="same_val",
                  lw=4,ms=10,legend=False,data=pd_yost,style="same_val",
-                 markers=["o"],err_style='bars',
-                 err_kws={'capsize':4,'elinewidth':4,'capthick':4},
+                 markers=[""],err_style='bars',
+                 err_kws={'mew':0,'elinewidth':4,'capthick':0},
                  dashes=False,palette=['k'])
     plt.xticks(rotation=90,size=30)
     plt.yticks(size=30)
@@ -543,7 +689,10 @@ def make_bandwidth_vs_error_humabn_plot():
     plt.xlabel("Bandwidth (Octaves)",size=40)
     [x.set_color("black") for x in plt.gca().get_lines()]
     plt.tight_layout()
-    plt.savefig(plots_folder+"/"+"yost_human_data_collapsed_bandwidth.png")
+    pd_yost.to_csv(plots_folder+"/"+"yost_human_data_collapsed_bandwidth.csv")
+    plt.savefig(plots_folder+"/"+"yost_human_data_collapsed_bandwidth.svg")
+    if return_pd:
+        return pd_yost
 
 
 
@@ -614,6 +763,11 @@ def plot_means_squared_error_by_freq_old(batch_conditionals_ordered,azim_lim=36,
         mean2 = [mean[x] for x in range(72)]
         top_error2 = [top_error[x] for x in range(72)]
         bottom_error2 = [bottom_error[x] for x in range(72)]
+        pd_data = pd.DataFrame(np_SEM_mean_array.T)
+        pd_data["azim"] = azim_range
+        pd_out = pd.melt(pd_data,id_vars="azim")
+        pd_out.columns = ['azim', 'index', 'error']
+        pd_out.to_csv(plots_folder+"/azimuth_vs_error_wood_graph_network.csv")
         #mean2 = [mean[x] for x in range(-18,19)]
         #top_error2 = [top_error[x] for x in range(-18,19)]
         #bottom_error2 = [bottom_error[x] for x in range(-18,19)]
@@ -637,7 +791,7 @@ def plot_means_squared_error_by_freq_old(batch_conditionals_ordered,azim_lim=36,
     #ax1.set_ylabel("Mean error (Degrees,Flipped)",fontsize=40)
     ax1.set_ylabel("Mean error (Degrees)",fontsize=40)
     ax1.set_xlabel("Azimuth (Degrees)",fontsize=40)
-    ax1.set_ylim(0,50)
+    #ax1.set_ylim(0,50)
     #ax1.set_xlim(-90,90)
     plt.xticks(size = 30)
     plt.yticks(size = 30)
@@ -727,6 +881,11 @@ def plot_means_squared_error_by_freq(batch_conditionals_ordered,azim_lim=36,
         SEM = np.std(np_SEM_mean_array,axis=0)/np.sqrt(len(SEM_mean_array))
         top_error = SEM*1.96
         bottom_error = SEM*1.96
+        pd_data = pd.DataFrame(np_SEM_mean_array.T)
+        pd_data["azim"] = azim_range
+        pd_out = pd.melt(pd_data,id_vars="azim")
+        pd_out.columns = ['azim', 'index', 'error']
+        pd_out.to_csv(plots_folder+"/azimuth_vs_error_wood_graph_network.csv")
         if labels != None:
             ax1.errorbar(azim_range,mean,yerr=[bottom_error,top_error],marker='o',lw=4,markersize=5,
                          elinewidth=4,color='k',label=labels[0])
@@ -743,102 +902,12 @@ def plot_means_squared_error_by_freq(batch_conditionals_ordered,azim_lim=36,
     plt.yticks(size = 30)
     ax1.legend(loc=2,fontsize=20)
     #colormap = plt.cm.gist_ncar
+    ax1.legend(loc=2,fontsize=20)
+    #colormap = plt.cm.gist_ncar
     #colors = [colormap(i) for i in np.linspace(0, 1,len(ax1.lines))]
     #for i,j in enumerate(ax1.lines):
     #    j.set_color(colors[i])
 
-
-def plot_means_squared_error_millsgraph(batch_conditionals_ordered,freqs,azim_lim=36,no_fold=False,bins_5deg=False,collapse_conditions=False):
-    mse_by_freq = []
-    for batch_conditionals in batch_conditionals_ordered:
-        mse_by_azim = []
-        if type(azim_lim) == list:
-            azim_lim_range = max(azim_lim)+1
-            azim_idx = azim_lim
-        else:
-            azim_idx = list(range(azim_lim))
-            azim_lim_range = azim_lim
-        for azim in range(azim_lim_range):
-            if bins_5deg:
-                a = [i[0][:72] for i in batch_conditionals if i[1] == azim]
-            else:
-                a = [i[0][:36] for i in batch_conditionals if i[1] == azim]
-            averages = [sum(i)/len(i) for i in zip(*a)]
-            try:
-                max_idxs = np.argmax(a,axis=1)
-            except:
-                print(azim,len(batch_conditionals))
-                pdb.set_trace()
-            if bins_5deg:
-                map_est  = np.bincount(max_idxs,minlength=72)/len(a)
-            else:
-                map_est  = np.bincount(max_idxs,minlength=36)/len(a)
-            if bins_5deg:
-                azim_degrees = azim*5
-            else:
-                azim_degrees = azim*10
-            if azim_degrees > 270 or azim_degrees < 90:
-                reversal_point = round(math.degrees(math.acos(-math.cos(math.radians((azim_degrees+azim_degrees//180*180)%360))))+azim_degrees//180*180)
-            else:
-                reversal_point =  azim_degrees
-            #folded = fold_locations(averages)
-            if bins_5deg:
-                reversal_idx = int((reversal_point - 90)/5)
-            else:
-                reversal_idx = int((reversal_point - 90)/10)
-            if no_fold:
-                folded = np.array(a)
-                value_mult = np.array([min(abs(value-azim),abs(36+azim-value))
-                                       for value,prob in enumerate(folded.T)])
-            else:
-                np_a = np.array(a)
-                if bins_5deg:
-                    folded = fold_locations_full_dist_5deg(np_a)
-                else:
-                    folded = fold_locations_full_dist(np_a)
-                value_mult = np.array([abs(value-reversal_idx) for value,prob in enumerate(folded.T)])
-            max_idxs = np.argmax(folded,axis=1)
-            #folded_map_est = fold_locations(map_est.tolist())
-            if bins_5deg:
-                val_error = 5*np.sum(folded*value_mult,axis=1)
-                ex_error = 5*value_mult[max_idxs]
-            else:
-                val_error = 10*np.sum(folded*value_mult,axis=1)
-                ex_error = 10*value_mult[map_idx]
-            mean_error,low_ci,high_ci = calc_CI(ex_error,single_entry=True)
-            #expected_error = 10*sum([prob*abs(value-reversal_idx) for value,prob in enumerate(folded)])
-            #expected_map_error = 10*sum([prob*abs(value-reversal_idx) for value,prob in enumerate(folded_map_est)])
-            mse_by_azim.append((mean_error,low_ci,high_ci))
-        mse_by_freq.append(mse_by_azim)
-    transposed = list(map(list,zip(*mse_by_freq)))
-
-    fig = plt.figure(figsize=(13,11))
-    ax1 = fig.add_subplot(111)
-    SEM_mean_array = []
-    for line_azim in azim_idx:
-        mean = [x[0] for x in transposed[line_azim]]
-        bottom_error = [x[1] for x in transposed[line_azim]]
-        top_error = [x[2] for x in transposed[line_azim]]
-        if collapse_conditions:
-            SEM_mean_array.append(mean)
-        else:
-            ax1.errorbar(freqs,mean,yerr=[bottom_error,top_error],marker='o',markersize=3, label = "{} Deg.".format(10*line_azim))
-        #ax1.set_ylim(0,100)
-        #ax1.plot(freqs,transposed[line_azim],marker='o',markersize=3, label = line_azim)
-    if collapse_conditions:
-        np_SEM_mean_array = np.array(SEM_mean_array)
-        mean = np.mean(np_SEM_mean_array,axis=0)
-        SEM = np.std(np_SEM_mean_array,axis=0)/np.sqrt(len(SEM_mean_array))
-        top_error = SEM*1.96
-        bottom_error = SEM*1.96
-        ax1.errorbar(freqs,mean,yerr=[bottom_error,top_error],marker='o',markersize=3, label = "{} Deg.".format(10*line_azim))
-    ax1.set_xscale('log')
-    ax1.set_xlim(99,12000)
-    ax1.set_xlabel("Frequency (Hz)", size=40)
-    ax1.set_ylabel("Mean error (Degrees)", size=40)
-    plt.xticks(size = 30)
-    plt.yticks(size = 30)
-    ax1.legend(loc=2,fontsize=20)
 
 def plot_means_squared_error_by_bandwidth(batch_conditionals_ordered,freqs,jitter_distance_octave_fraction,azim_lim=36,labels=None,no_fold=False,bins_5deg=False,collapse_conditions=False):
     if bins_5deg and azim_lim == 36:
@@ -893,6 +962,7 @@ def plot_means_squared_error_by_bandwidth(batch_conditionals_ordered,freqs,jitte
                         else:
                             folded = fold_locations_full_dist(np_a)
                         value_mult = np.array([abs(value-reversal_idx) for value,prob in enumerate(folded.T)])
+
                     max_idxs = np.argmax(folded,axis=1)
                     #folded_map_est = fold_locations(map_est.tolist())
                     if bins_5deg:
@@ -913,6 +983,11 @@ def plot_means_squared_error_by_bandwidth(batch_conditionals_ordered,freqs,jitte
     np_SEM_mean_array= np.array(mse_by_arch).astype(np.float32)
     #Not sure this is still necessary after the sum/len above
     #np_SEM_mean_array = np_mse_by_arch.mean(axis=3)
+    pd_data = pd.DataFrame(np_SEM_mean_array.squeeze().T)
+    pd_data["bandwidth"] = bandwidth_set
+    pd_out = pd.melt(pd_data,id_vars="bandwidth")
+    pd_out.columns = ['bandwidth', 'index', 'error']
+    pd_out.to_csv(plots_folder+"/bandwidth_vs_error_network.csv")
     mean = np.mean(np_SEM_mean_array,axis=0)
     SEM = np.std(np_SEM_mean_array,axis=0)/np.sqrt(np_SEM_mean_array.shape[0])
     top_error = SEM*1
@@ -923,9 +998,9 @@ def plot_means_squared_error_by_bandwidth(batch_conditionals_ordered,freqs,jitte
     for f_counter, freq_label in enumerate(freqs):
                 ax1.errorbar(bandwidth_set,mean[f_counter],
                              yerr=[bottom_error[f_counter],top_error[f_counter]],
-                             marker='o', label = freq_label,
-                             lw=4,ms=10,capsize=4,elinewidth=4,
-                             capthick=4,color='k')
+                             marker='', label = freq_label,
+                             lw=4,ms=10,capsize=0,elinewidth=4,
+                             capthick=0,color='k')
     ax1.set_ylabel("Mean error (Degrees)",fontsize=40)
     ax1.set_xlabel("Bandwidth (Octaves)",fontsize=40)
     ax1.legend(loc=1,fontsize=25)
@@ -936,227 +1011,6 @@ def plot_means_squared_error_by_bandwidth(batch_conditionals_ordered,freqs,jitte
     plt.gca().get_legend().remove()
     plt.tight_layout()
     plt.savefig(plots_folder+"/"+"bandwidth_vs_error_network_plot.png")
-
-def polar_heat(values, thetas=None, radii=None, ax=None, fraction=0.3,
-               **kwargs):
-
-    values = np.atleast_2d(values)
-    if thetas is None:
-        thetas = np.linspace(0, 2*np.pi, values.shape[1]).reshape(1, -1)
-    if radii is None:
-        radii = np.linspace(0, 1, values.shape[0] + 1).reshape(-1, 1)
-    if ax is None:
-        fig, ax = plt.subplots(1, 1, subplot_kw={'polar':True})
-
-    mesh = ax.pcolormesh(thetas, radii, values, **kwargs)
-
-    radrange = radii.ptp()
-    ax.set_rlim(radrange * (1 - 1. / fraction), radrange)
-    return mesh
-
-def sphere_plot():
-	n_theta = 8 # number of values for theta
-	n_phi = 37  # number of values for phi
-	r = 2        #radius of sphere
-
-	theta, phi = np.mgrid[6/36*np.pi:0.55*np.pi:n_theta*1j, 0.0:2.0*np.pi:n_phi*1j]
-
-	x = r*np.sin(theta)*np.cos(phi)
-	y = r*np.sin(theta)*np.sin(phi)
-	z = r*np.cos(theta)
-
-	# mimic the input array
-	# array columns phi, theta, value
-	# first n_theta entries: phi=0, second n_theta entries: phi=0.0315..
-	inp = []
-	for j in phi[0,:]:
-		for i in theta[:,0]:
-			val = 0.7+np.cos(j)*np.sin(i+np.pi/4.)# put something useful here
-			inp.append([j, i, val])
-	inp = np.array(inp)
-	print(inp.shape)
-	print(inp[49:60, :])
-
-	#reshape the input array to the shape of the x,y,z arrays. 
-	c = inp[:,2].reshape((n_phi,n_theta)).T
-	print(z.shape)
-	print(c.shape)
-	c[0,0] = 3.2
-
-
-	#Set colours and render
-	fig = plt.figure(figsize=(10, 8))
-	ax = fig.add_subplot(111, projection='3d')
-	#use facecolors argument, provide array of same shape as z
-	# cm.<cmapname>() allows to get rgba color from array.
-	# array must be normalized between 0 and 1
-	ax.plot_surface(
-		x,y,z,  rstride=1, cstride=1, facecolors=mpl.cm.viridis(c/c.max()), alpha=0.7, linewidth=1) 
-	ax.set_xlim([-2.2,2.2])
-	ax.set_ylim([-2.2,2.2])
-	ax.set_zlim([0,4.4])
-	ax.set_aspect("equal")
-	ax.view_init(elev=30, azim=90)
-
-def split_noise_groups(batch_conditionals_noise):
-    bins = [50,100,200,400,800,1600,3200,6400,12800]
-    ordered = []
-    for value in bins:
-        matches = [example for example in batch_conditionals_noise if abs(example[2]- value) <= value*.20]
-        ordered.append(matches)
-    return ordered
-
-def split_tone_groups(batch_conditionals_tone):
-    bins = [(0,1000),(1000,3000),(3000,15000)]
-    ordered = []
-    for value_min,value_max in bins:
-        matches = [example for example in batch_conditionals_tone if value_min <= example[2] <= value_max]
-        ordered.append(matches)
-    return ordered
-
-def split_tone_indv_freqs(batch_conditionals_tone):
-    freqs = list(set(batch_condtionals_tone[:,2]))
-    ordered = []
-    for value in freqs:
-        matches = [example for example in batch_conditionals_tone if value == example[2]]
-        ordered.append(matches)
-    return ordered
-    
-
-def split_tone_mills_graph(batch_conditionals_tone):
-    bins = [(250,350),(500,600),(750,850),(1000,1100),(1250,1350),(1500,1600),(1750,1850),(2000,2100),(3000,3100),(4000,4100),(6000,6100),(8000,8100),(10000,10100)]
-    ordered = []
-    for value_min,value_max in bins:
-        matches = [example for example in batch_conditionals_tone if abs(example[2]- value_min) <= 0.2*value_min**.9]
-        ordered.append(matches)
-    freqs = [x[0]  for x in bins]
-    return ordered, freqs
-
-def split_ITD_tone_groups(batch_conditionals_noise):
-    bins = [100,200,400,800,1000,1250,1500,1750,2000,3000,6000]
-    ordered = []
-    for value in bins:
-        matches = [example for example in batch_conditionals_noise if abs(example[2]- value) <= 0.2*value**.9]
-        ordered.append(matches)
-    return ordered
-
-def split_ITD_tone_groups_1octv(batch_conditionals_noise):
-    bins = [100,200,300,400,500,600,700,800,900,1000,1250,1500,1750,2000,2250,2500,2750,3000,3500,4000,4500,5000,5500,6000,6500,7000,7500,8000,8500,9000,9500,10000,11000]
-    ordered = []
-    for value in bins:
-        matches = [example for example in batch_conditionals_noise if abs(example[2]- value) <= 0.2*value**.85]
-        ordered.append(matches)
-    return ordered
-
-def split_ITD_tone_groups_1octv_abs(batch_conditionals_noise):
-    bins = [100,200,300,400,500,600,700,800,900,1000,1250,1500,1750,2000,2250,2500,2750,3000,3500,4000,4500,5000,5500,6000,6500,7000,7500,8000,8500,9000,9500,10000,11000]
-    ordered = []
-    for value in bins:
-        matches = [example for example in batch_conditionals_noise if (abs(example[2]- value) <= 50) or (abs(example[2]- value) <= 100 and value > 3000)]
-        ordered.append(matches)
-    return ordered
-
-def assign_ITD_tone_group_abs(row):
-    bins = [100,200,300,400,500,600,700,800,900,1000,1250,1500,1750,2000,2250,2500,2750,3000,3500,4000,4500,5000,5500,6000,6500,7000,7500,8000,8500,9000,9500,10000,11000]
-    freq = row['frequency']
-    for cur_bin in bins:
-        if (abs(freq - cur_bin) <= 50) or (abs(freq - cur_bin) <= 100 and cur_bin > 3000):
-            return cur_bin
-    
-
-def split_sam_tones_by_carrier_freq(batch_conditional_data):
-   keys = sorted(set([x[1] for x in batch_conditional_data]))
-   ordered = []
-   for key in keys:
-       matches = [x for x in batch_conditional_data if x[1] == key]
-       ordered.append(matches)
-   return ordered, list(keys)
-
-
-def split_sam_tones_by_modulator_freq(batch_conditional_data):
-   keys = sorted(set([x[2] for x in batch_conditional_data]))
-   ordered = []
-   for key in keys:
-       matches = [x for x in batch_conditional_data if x[2] == key]
-       ordered.append(matches)
-   return ordered, list(keys)
-
-
-def split_ITD_comparisons_by_modulation_freq(afc_results):
-   keys = sorted(set([x[2][0] for x in afc_results]))
-   ordered = []
-   for key in keys:
-       matches = [x for x in afc_results if x[2][0] == key]
-       ordered.append(matches)
-   return ordered, list(keys)
-
-
-
-def plot_noises_ordered(odered):
-    ordered = split_noise_groups(batch_conditionals_noise)
-    bins = [50,100,200,400,800,1600,3200,6400,12800]
-    for i,noise_type in enumerate(ordered):
-        plot_cond_prob_azim(noise_type)
-        plt.savefig(plots_folder+"/"+"cond_dist_noise{}_var_env.png".format(bins[i])) 
-
-def plot_noises_folded(odered):
-    ordered = split_noise_groups(batch_conditionals_noise)
-    bins = [50,100,200,400,800,1600,3200,6400,12800]
-    for i,noise_type in enumerate(ordered):
-        plot_cond_prob_azim_folded(noise_type)
-        plt.savefig(plots_folder+"/"+"cond_dist_noise{}_folded_var_env.png".format(bins[i])) 
-
-def plot_tones_ordered(ordered):
-    ordered_loc = split_tone_groups(batch_conditionals_tone)
-    bins = [1000,3000,15000]
-    for i,noise_type in enumerate(ordered):
-        plot_cond_prob_azim(noise_type)
-        plt.savefig(plots_folder+"/"+"cond_dist_tones{}_var_env.png".format(bins[i])) 
-
-def plot_tones_folded(ordered):
-    ordered_loc = split_tone_groups(batch_conditionals_tone)
-    bins = [1000,3000,15000]
-    for i,noise_type in enumerate(ordered):
-        plot_cond_prob_azim_folded(noise_type)
-        plt.savefig(plots_folder+"/"+"cond_dist_tones{}_folded_var_env.png".format(bins[i])) 
-
-
-def plot_mills_graph_tones(batch_conditionals_tone,azim_lim=36):
-    ordered,freqs = split_tone_mills_graph(batch_conditionals_tone)
-    plot_means_squared_error(ordered,freqs,azim_lim)
-    plt.title("Mills Graph with Pure Tones")
-    plt.savefig(plots_folder+"/"+"4orderfilt_mills_graph_jittered_tones_sphere_do_net.png")
-
-def plot_mills_graph_noise(batch_conditionals_noise,azim_lim=36):
-    freqs = [200,400,800,1600,3200,6400,12800]
-    ordered = split_noise_groups(batch_conditionals_noise)
-    plot_means_squared_error(ordered[2:],freqs,azim_lim)
-    plt.title("Mills Graph with Noise Bursts")
-    plt.savefig(plots_folder+"/"+"4orderfilt_mills_graph_noise_jittered_sphere_do_net.png")
-
-def plot_error_by_azim_tones(batch_conditionals_tone):
-    ordered_loc = split_tone_groups(batch_conditionals_tone)
-    bins = [1000,3000,15000]
-    for i in range(len(ordered_loc)):
-        plot_means_squared_error_by_freq([ordered_loc[i]],labels=["Anechoic"])
-        plt.title("Mean Error with Tones Near {}Hz".format(bins[i]))
-        plt.savefig(plots_folder+"/"+"4orderfilt_mse_jittered_tones_no_fold_{}_sphere_do_net_by_azim.png".format(bins[i]))
-    
-def plot_error_by_azim_noise(batch_conditionals_noise):
-    ordered_loc = split_noise_groups(batch_conditionals_noise)
-    bins = [50,100,200,400,800,1600,3200,6400,12800]
-    for i in range(len(ordered_loc)):
-        plot_means_squared_error_by_freq([ordered_loc[i]],labels=["Anechoic"])
-        plt.title("Mean Error with 1 Octave Noise Band at {}Hz".format(bins[i]))
-        plt.savefig(plots_folder+"/"+"4orderfilt_mse_jittered_noise_no_fold_{}_sphere_do_net_by_azim.png".format(bins[i]))
-
-def plot_ITD_graph(batch_conditionals_noise,azim_lim=36):
-    freqs = [100,200,400,800,1600,3200,6400,12800]
-    ordered = split_noise_groups(batch_conditionals_noise)
-    plot_means_squared_error(ordered[1:],freqs,azim_lim,collapse_azims=False)
-    plt.title("Mills Graph with ITDs only")
-    plt.savefig(plots_folder+"/"+"4orderfilt_mills_graph_left_side_ITD_tones_jittered_sphere_do_net_iter75k.png")
-
 
 def compare_ITDs(batch_condtionals_tone,min_dist=0,max_dist=math.inf,manually_added=True,midline_refernece_version=False):
     #compares all pairs of stimuli and determines if network can identify wich
@@ -1193,266 +1047,6 @@ def compare_ITDs(batch_condtionals_tone,min_dist=0,max_dist=math.inf,manually_ad
         batch_results.append(results)
         batch_results = sorted(batch_results, key= lambda x: x[1][1])
     return batch_results
-
-
-def compare_ITDs_across_midline(batch_condtionals_tone,min_dist=0,max_dist=math.inf,manually_added=True,centerofmass=False):
-    #compares all pairs of stimuli and determines if network can identify which
-    #is on the right and on the left(2AFC task simulation)
-    batch_results = []
-    for batch in batch_condtionals_tone:
-        cond_dict = {}
-        for exemplar in batch:
-            cond_dict.setdefault((abs(exemplar[1]),exemplar[2]),[]).append(exemplar)
-        #sorted_batch = sorted(batch, key=lambda x: abs(x[1]))
-        sorted_pairs = [(v[0],v[1]) for k,v in cond_dict.items() if len(v) ==2]
-        #sorted_pairs = [(x,y) for x,y in zip(sorted_batch, sorted_batch[1:]) if y[1] != x[1] and abs(y[1]) == abs(x[1])]
-        results = []
-        for pair in sorted_pairs:
-            correct = False
-            x,y = pair[0],pair[1]
-            x_label,y_label = x[1],y[1]
-            if not manually_added:
-                x_idx,y_idx = get_folded_label_idx(x_label),get_folded_label_idx(y_label)
-            else:
-                x_idx,y_idx = x_label,y_label
-            label_diff = x_idx - y_idx
-            if label_diff == 0:
-                pdb.set_trace()
-            #meant to allow for splitting 2AFC task into different distance
-            #ranges to test system sensitivity
-            if abs(label_diff) > max_dist or abs(label_diff) < min_dist:
-                continue
-            x_freq,y_freq = x[2],y[2]
-            x_dist_folded,y_dist_folded = fold_locations_full_dist_5deg(x[0][:72]),\
-                fold_locations_full_dist_5deg(y[0][:72])
-            if centerofmass:
-                x_center,y_center = ndimage.center_of_mass(x_dist_folded)[0],\
-                    ndimage.center_of_mass(y_dist_folded)[0]
-            else:
-                x_center,y_center = x_dist_folded.argmax(), y_dist_folded.argmax()
-            predicted_diff = x_center-y_center
-            if sign(predicted_diff) == sign(label_diff):
-                correct = True
-            results.append([(x_label,y_label),(x_freq,y_freq),predicted_diff,label_diff,correct])
-        batch_results.append(results)
-        batch_results = sorted(batch_results, key= lambda x: x[1][1])
-    return batch_results
-
-
-
-def compare_sam_tones_across_midline(batch_condtionals_tone,min_dist=0,max_dist=math.inf,manually_added=True,centerofmass=False):
-    #compares all pairs of stimuli and determines if network can identify wich
-    #is on the right and on the left(2AFC task simulation)
-    batch_results = []
-    for batch in batch_condtionals_tone:
-        cond_dict = {}
-        for exemplar in batch:
-            cond_dict.setdefault((abs(exemplar[1]),exemplar[2],exemplar[3],exemplar[4]),[]).append(exemplar)
-        #sorted_batch = sorted(batch, key=lambda x: abs(x[1]))
-        sorted_pairs = [(v[0],v[1]) for k,v in cond_dict.items() if len(v) ==2]
-        #sorted_pairs = [(x,y) for x,y in zip(sorted_batch, sorted_batch[1:]) if y[1] != x[1] and abs(y[1]) == abs(x[1])]
-        results = []
-        for pair in sorted_pairs:
-            correct = False
-            x,y = pair[0],pair[1]
-            #Label set to modulation delay value
-            x_delay,y_delay = x[4],y[4]
-            x_flipped, y_flipped = x[5],y[5]
-            x_left, y_left = (-1)**x_flipped, (-1)**y_flipped
-            x_label, y_label = x_delay*x_left,y_delay*y_left
-            if not manually_added:
-                x_idx,y_idx = get_folded_label_idx(x_label),get_folded_label_idx(y_label)
-            else:
-                x_idx,y_idx = x_label,y_label
-            label_diff = x_idx - y_idx
-            if label_diff == 0:
-                pdb.set_trace()
-            #meant to allow for splitting 2AFC task into different distance
-            #ranges to test system sensitivity
-            if abs(label_diff) > max_dist or abs(label_diff) < min_dist:
-                continue
-            x_carrier_freq,y_carrier_freq = x[1],y[1]
-            x_modulator_freq,y_modulator_freq = x[2],y[2]
-            x_dist_folded,y_dist_folded = fold_locations_full_dist_5deg(x[0][:72]),\
-                fold_locations_full_dist_5deg(y[0][:72])
-            if centerofmass:
-                x_center,y_center = ndimage.center_of_mass(x_dist_folded)[0],\
-                    ndimage.center_of_mass(y_dist_folded)[0]
-            else:
-                x_center,y_center = x_dist_folded.argmax(), y_dist_folded.argmax()
-            predicted_diff = x_center-y_center
-            if sign(predicted_diff) == sign(label_diff):
-                correct = True
-            results.append([(x_label,y_label),(x_carrier_freq,y_carrier_freq),
-                            (x_modulator_freq,y_modulator_freq),predicted_diff,
-                            label_diff,correct])
-        batch_results.append(results)
-        batch_results = sorted(batch_results, key= lambda x: x[0][2])
-    return batch_results
-
-
-def compare_transposed_tones_across_midline(batch_condtionals_tone,min_dist=0,max_dist=math.inf,manually_added=True,centerofmass=False):
-    #compares all pairs of stimuli and determines if network can identify wich
-    #is on the right and on the left(2AFC task simulation)
-    batch_results = []
-    for batch in batch_condtionals_tone:
-        cond_dict = {}
-        for exemplar in batch:
-            cond_dict.setdefault((abs(exemplar[1]),exemplar[2],exemplar[3]),[]).append(exemplar)
-        #sorted_batch = sorted(batch, key=lambda x: abs(x[1]))
-        sorted_pairs = [(v[0],v[1]) for k,v in cond_dict.items() if len(v) ==2]
-        #sorted_pairs = [(x,y) for x,y in zip(sorted_batch, sorted_batch[1:]) if y[1] != x[1] and abs(y[1]) == abs(x[1])]
-        results = []
-        for pair in sorted_pairs:
-            correct = False
-            x,y = pair[0],pair[1]
-            #Label set to modulation delay value
-            x_delay,y_delay = x[3],y[3]
-            x_flipped, y_flipped = x[4],y[4]
-            x_left, y_left = (-1)**(x_flipped-1), (-1)**(y_flipped-1)
-            x_label, y_label = x_delay*x_left,y_delay*y_left
-            if not manually_added:
-                x_idx,y_idx = get_folded_label_idx(x_label),get_folded_label_idx(y_label)
-            else:
-                x_idx,y_idx = x_label,y_label
-            label_diff = x_idx - y_idx
-            if label_diff == 0:
-                pdb.set_trace()
-            #meant to allow for splitting 2AFC task into different distance
-            #ranges to test system sensitivity
-            if abs(label_diff) > max_dist or abs(label_diff) < min_dist:
-                continue
-            x_carrier_freq,y_carrier_freq = x[1],y[1]
-            x_modulator_freq,y_modulator_freq = x[2],y[2]
-            x_dist_folded,y_dist_folded = fold_locations_full_dist_5deg(x[0][:72]),\
-                fold_locations_full_dist_5deg(y[0][:72])
-            if centerofmass:
-                x_center,y_center = ndimage.center_of_mass(x_dist_folded)[0],\
-                    ndimage.center_of_mass(y_dist_folded)[0]
-            else:
-                x_center,y_center = x_dist_folded.argmax(), y_dist_folded.argmax()
-            predicted_diff = x_center-y_center
-            if sign(predicted_diff) == sign(label_diff):
-                correct = True
-            results.append([(x_label,y_label),(x_carrier_freq,y_carrier_freq),
-                            (x_modulator_freq,y_modulator_freq),predicted_diff,
-                            label_diff,correct])
-        batch_results.append(results)
-        batch_results = sorted(batch_results, key= lambda x: x[2])
-    return batch_results
-
-def bin_ITDs(batch_condtionals_tone,centerofmass=False,min_pos=-math.inf,max_pos=math.inf):
-    #finda most likely locaciont for each distribution
-    results = []
-    for batch in batch_condtionals_tone:
-        label = batch[1]
-        #meant to allow for splitting 2AFC task into different distance
-        #ranges to test system sensitivity
-        if label > max_pos or label < min_pos:
-            continue
-        freq = batch[2]
-        folded= fold_locations_full_dist(batch[0][:36])
-        if centerofmass:
-            center = ndimage.center_of_mass(folded)[0]-1
-        else:
-            center = folded.argmax()
-        results.append([label,freq,center])
-    return np.array(results)
-
-def filter_comparisons_by_offset(afc_results,cutoff):
-    afc_filtered = []
-    for freq_group in afc_results:
-        filtered = [x for x in freq_group if abs(x[0][0]) < cutoff]
-        afc_filtered.append(filtered)
-    return afc_filtered
-
-
-def filter_comparisons_by_offset_equal(afc_results, min_cutoff, max_cutoff):
-    afc_filtered = []
-    for freq_group in afc_results:
-        filtered = [x for x in freq_group if min_cutoff <= abs(x[0][0]) <= max_cutoff]
-        afc_filtered.append(filtered)
-    return afc_filtered
-
-def filter_comparisons_by_carrier(afc_results,carrier,
-                                  jitter_distance_octave_fraction=0):
-    carrier = [carrier] if carrier is int else carrier
-    afc_filtered = []
-    fuzzy_mult = 2**(jitter_distance_octave_fraction)-1
-    for freq_group in afc_results:
-        filtered = [x for x in freq_group if val_in_list_fuzzy(abs(x[1][0]),carrier,fuzzy_mult)]
-        afc_filtered.append(filtered)
-    return afc_filtered
-
-
-def calc_2AFC_vs_ITD(afc_results_filtered):
-    keys = sorted(set([abs(x[0][0]) for x in afc_results_filtered]))
-    acc_arr = []
-    for key in keys:
-        values = [x for x in afc_results_filtered if abs(x[0][0]) == key]
-        np_values = np.array(values)
-        bool_arr = np_values[:,-1].astype(np.bool)
-        total = np_values.shape[0]
-        mean_error,low_ci,high_ci = calc_CI(bool_arr,single_entry=True,
-                                        stat_func=bs_stats.sum,iteration_batch_size=100)
-        acc = mean_error/total
-        low_acc = low_ci/total
-        high_acc = high_ci/total
-        acc_arr.append([acc,low_acc,high_acc])
-    transposed = list(zip(*acc_arr))
-    mean = [100*x for x in transposed[0]]
-    bottom_error = [100*x for x in transposed[1]]
-    top_error = [100*x for x in transposed[2]]
-    return (keys,mean,bottom_error,top_error)
-
-def plot_2AFC_vs_ITD_by_mod_freq(afc_results_array,keys,carrier_list =None,
-                                 plotted_keys=[50,150,300,600]):
-
-    assert all(plotkey in keys for plotkey in plotted_keys), \
-            ("Plotted Key not Available! \n Available Keys: {} \
-             \n Requested Keys: {}".format(keys,plotted_keys))
-
-    fig = plt.figure(figsize=(13,11))
-    ax1 = fig.add_subplot(111)
-    ax1.set_xlabel("Delay (microseconds)",size=40)
-    ax1.set_ylabel("2AFC % correct",size=40)
-    ax1.set_ylim(-10,110)
-    ax1.set_xlim(0,1050)
-    plt.xticks(size = 30)
-    plt.yticks(size = 30)
-    ax1.axhline(50,color='k',linestyle='dashed',alpha=0.5)
-    #iterates through keys and skips if not in plotted_keys set
-    for i,key in enumerate(keys):
-        #iterates through networks and calculates individual repsonses
-        if key not in plotted_keys:
-            continue
-        mean_array = []
-        for afc_results in afc_results_array:
-            #finds correct response data for given key
-            data_idx = [i for i,x in enumerate(afc_results) if 
-                        x[0][2] == (key,key)]
-            assert len(data_idx) == 1 ,\
-                    ("Data not formatted as expected! " 
-                    "Multiple sublists with same modulation frequency!")
-            #calculates 2AFC results
-            ITDs,mean,bottom_error,top_error = \
-                    calc_2AFC_vs_ITD(afc_results[data_idx[0]])
-
-            mean_array.append(mean)
-        #calculates SEM over networks
-        np_mean_array = np.array(mean_array)
-        grand_mean = np.mean(np_mean_array,axis=0)
-        SEM = np.std(np_mean_array,axis=0)/np.sqrt(len(mean_array))
-        top_error = SEM*1.96
-        bottom_error = SEM*1.96
-        x_labels = [x*1000 for x in ITDs]
-        #ax1.plot(x_labels,mean,marker='o',markersize=3,
-        #         label="{} Modulation Freq.".format(float(key)))
-        #plots line over networks for single modulation frequency
-        ax1.errorbar(x_labels,grand_mean,yerr=[bottom_error,top_error],marker='o',markersize=3,
-                     label= "{} Modulation Freq.".format(int(key)))
-    ax1.legend(loc='best')
-    
 
 def plot_precednece_effect(np_data_array):
     delays = sorted(list(set(np_data_array[:,1])))  
@@ -1507,46 +1101,6 @@ def plot_precedence_clicks_by_delay(afc_results_array):
         ax1.errorbar(x_labels,grand_mean[i],yerr=[bottom_error[i],top_error[i]],marker='o',markersize=3,
                      label= "{} Flipped".format(i))
     ax1.legend(loc='best')
-
-
-
-
-
-
-def plot_localization_manaully_added_ILD(results,freq_ranges=[("low",200,400),("high",2000,4000)]):
-    ILD_list = [-20,-15,-10,-5,0,5,10,15,20]
-    for freq_range,min_val,max_val in freq_ranges:
-        results_freq_filtered = results[np.all([results[:,1] <= max_val, results[:,1] >=
-                                           min_val],axis=0)]
-        for ILD in ILD_list:
-            results_filtered = results_freq_filtered[results_freq_filtered[:,0] == ILD]
-            fig = plt.figure(figsize=(11,8))
-            ax1 = fig.add_subplot(111)
-            bins = [i for i in range(90,280,10)]
-            ax1.hist(results_filtered[:,2])
-            ax1.set_xlabel("Predicted Center Position (Folded)")
-            ax1.set_xlim(0,18)
-            ax1.set_ylabel("Count")
-            ax1.set_title("Folded Localization with {} ILD".format(ILD))
-            plt.savefig(plots_folder+"/"+"localization_manually_added_ILD_{}_freq_{}ILD.png".format(freq_range,ILD)) 
-
-    
-def plot_localization_manaully_added_ITD(results, freq_ranges=[("low",200,400),("high",2000,4000)]):
-    ITD_list = [-30,-20,-15,-10,-5,0,5,10,15,20,30]
-    for freq_range,min_val,max_val in freq_ranges:
-        results_freq_filtered = results[np.all([results[:,1] <= max_val, results[:,1] >=
-                                           min_val],axis=0)]
-        for ITD in ITD_list:
-            results_filtered = results_freq_filtered[results_freq_filtered[:,0] == ITD]
-            fig = plt.figure(figsize=(11,8))
-            ax1 = fig.add_subplot(111)
-            bins = [i for i in range(90,280,10)]
-            ax1.hist(results_filtered[:,2])
-            ax1.set_xlabel("Predicted Center Position (Folded)")
-            ax1.set_xlim(0,18)
-            ax1.set_ylabel("Count")
-            ax1.set_title("Folded Localization with {} ITD".format(ITD))
-            plt.savefig(plots_folder+"/"+"localization_manually_added_ITD_{}_freq_{}ITD.png".format(freq_range,ITD)) 
             
 def plot_relative_comparison_acc(results_ILD,sing_freq=False):
     #freqs = [100,200,400,800,1000,1250,1500,1750,2000,3000,6000]
@@ -1643,276 +1197,6 @@ def plot_relative_comparison_acc_multiple_lines(results_ILD_array,freqs=None,col
     return out_dict
 
 
-
-
-def plot_relative_comparison_sam_tones_multiple_lines(results_ILD_array,freqs=None,collapse_across_conditions=False,sing_freq=False):
-    fig = plt.figure(figsize=(13,11))
-    ax1 = fig.add_subplot(111)
-    ax1.set_xscale('log')
-    ax1.set_xlabel("Frequency (Hz)",size=40)
-    ax1.set_ylabel("2AFC % correct",size=40)
-    ax1.set_ylim(0,100)
-    plt.xticks(size = 30)
-    plt.yticks(size = 30)
-    ax1.axhline(50,color='k',linestyle='dashed',alpha=0.5)
-    ax1.legend(loc=1)
-    mean_array = []
-    #freqs = [100,200,400,800,1000,1250,1500,1750,2000,3000,6000]
-    if collapse_across_conditions:
-        results_ILD_array = [[sum(x,[]) for x in zip(*results_ILD_array)]]
-    for results_ILD in results_ILD_array: 
-        freqs = freqs if freqs != None else [100,200,300,400,500,600,700,800,900,1000,1250,1500,1750,2000,2250,2500,2750,3000,3500,4000,4500,5000,5500,6000,6500,7000,7500,8000,8500,9000,9500,10000,11000]
-        #freqs = [100,250,500,750,1000,1250,1500,1750,2000,3000,4000,6000]
-        if sing_freq:
-            freqs = []
-        acc_arr = []
-        ##change to correct resutls variable
-        print("Bootstrapping data...")
-        for i,res in enumerate(results_ILD):
-            res_np = np.array(res)
-            bool_arr = res_np[:,-1].astype(np.bool)
-            total = res_np.shape[0]
-            mean_error,low_ci,high_ci = calc_CI(bool_arr,single_entry=True,
-                                            stat_func=bs_stats.sum,iteration_batch_size=100)
-            acc = mean_error/total
-            low_acc = low_ci/total
-            high_acc = high_ci/total
-            acc_arr.append([acc,low_acc,high_acc])
-            if sing_freq:
-                freqs.append(res_np[0,1][0])
-        transposed = list(zip(*acc_arr))
-        mean = [100*x for x in transposed[0]]
-        bottom_error = [100*x for x in transposed[1]]
-        top_error = [100*x for x in transposed[2]]
-        mean_array.append(mean)
-    np_mean_array = np.array(mean_array)
-    mean = np.mean(np_mean_array,axis=0)
-    SEM = np.std(np_mean_array,axis=0)/np.sqrt(len(mean_array))
-    top_error = SEM*1.96
-    bottom_error = SEM*1.96
-    ax1.errorbar(freqs,mean,yerr=[bottom_error,top_error],marker='o',markersize=3,alpha=0.6)
-
-
-def filter_joint_cues_by_agreement_new(np_data_array,cues_agree,included_ILD,
-                                   remove_ILD_col=True):
-    assert isinstance(included_ILD,list), TypeError("included_ILD must be of "
-                                                    "type list")
-    filtered_np_data_array =[]
-    for np_data in np_data_array:
-        ITD_bool = np_data[:,3] >= 0.0 
-        ILD_bool = np_data[:,4] >= 0.0
-        if cues_agree:
-            c1 = ITD_bool == ILD_bool
-        else:
-            c1 = ITD_bool != ILD_bool
-        ILD_zero_bool = np.isin(np.absolute(np_data[:,4]),[0])
-        c1_2 = ILD_zero_bool|c1
-        c3 = np.isin(np.absolute(np_data[:,4]),included_ILD)
-        idx_to_remove = [1,2,4] if remove_ILD_col else [1,2]
-        selector = [x for x in range(np_data.shape[1]) if x not in
-                    idx_to_remove]
-        filtered_np_data = np_data[c1_2&c3][:,selector]
-        filtered_np_data_array.append(filtered_np_data)
-    return filtered_np_data_array
-
-
-def make_ILD_ITD_joint(np_data_array,included_ILD_list,ILD_results_dict=None):
-    if ILD_results_dict is None:
-        ILD_results_dict = {}
-    for ILD in included_ILD_list:
-        filtered_np_data_array =[]
-        for np_data in np_data_array:
-            c1 = np.isin(np_data[:,4],[ILD])
-            selector = [x for x in range(np_data.shape[1]) if x not in [1,2,4]]
-            filtered_np_data = np_data[c1][:,selector]
-            filtered_np_data_array.append(filtered_np_data)
-        afc_results_filtered = preprocess_relative_comparisons_interpolated(filtered_np_data_array)
-        afc_results_freq_combined = list(map(lambda x: sum(x,[])
-                                        ,afc_results_filtered))
-        ILD_results_dict[ILD] = afc_results_freq_combined
-    return ILD_results_dict
-
-def make_heatmap_from_ITD_ILD(ILD_results_dict):
-    ITD_ILD_dict = {}
-    for ILD,afc_array in ILD_results_dict.items():
-        for arch_afc_array in afc_array:
-            ITD_ILD_dict_single_arch = {}
-            for exemplar in arch_afc_array:
-                ITD_ILD_dict_single_arch.setdefault((exemplar[0][0],ILD),[]).append(exemplar[-1])
-            for ITD_ILD_pair,is_correct_by_trial in ITD_ILD_dict_single_arch.items():
-                pos_count = is_correct_by_trial.count(True)
-                total_count = float(len(is_correct_by_trial))
-                success_rate = pos_count / total_count
-                ITD_ILD_dict.setdefault(ITD_ILD_pair,[]).append(success_rate)
-    pdb.set_trace()
-    heatmap_list = []
-    for ITD_ILD_pair, success_rate_list in ITD_ILD_dict.items():
-        avg_success_rate = sum(success_rate_list)/len(success_rate_list)
-        heatmap_list.append([avg_success_rate,ITD_ILD_pair[0],ITD_ILD_pair[1]])
-    cols = ['Correct', 'ITD' , 'ILD']
-    np_heatmap_list = np.array(heatmap_list)
-    df = pd.DataFrame(data=np_heatmap_list,columns=cols)
-    return df
-
-
-def preprocess_relative_comparisons_joint_ITD_ILD_interpolated(np_data_array,cues_agree=True,included_ILD_list=[20,10,5]):
-    for included_ILD in included_ILD_list:
-        included_ILD = included_ILD if isinstance(included_ILD,list) else list(included_ILD)
-        np_data_array_filtered = filter_joint_cues_by_agreement(np_data_array,cues_agree=cues_agree,included_ILD=included_ILD)
-        afc_results_array = []
-        for np_data in np_data_array:
-            ordered = split_ITD_tone_groups_1octv_abs(np_data)
-            afc_results = compare_ITDs_across_midline(ordered)
-            afc_results_array.append(afc_results)
-        plot_relative_comparison_acc_multiple_lines(afc_results_array)
-        plt.savefig(plots_folder+"/"+"man_added__collapsed_freqs_across_midline_interpolated_ITDfull-ILD{}_tones_jitteredPhase_no_hanning_trained_valid_padded_naturalSoundsReveb_sparse_textures_iter{}k_foldfix_collapsedArchitectures_dictdatapassing.png".format(included_ILD,man_ver,iteration))
-
-def preprocess_relative_comparisons(np_data_array):
-    afc_results_array = []
-    for np_data in np_data_array:
-        ordered = split_ITD_tone_groups_1octv(np_data)
-        afc_results = compare_ITDs_across_midline(ordered)
-        afc_results_filtered = filter_comparisons_by_offset(afc_results,30)
-        afc_results_array.append(afc_results_filtered)
-    return afc_results_array
-        
-
-def preprocess_relative_comparisons_interpolated(np_data_array):
-    afc_results_array = []
-    for np_data in np_data_array:
-        ordered = split_ITD_tone_groups_1octv_abs(np_data)
-        afc_results = compare_ITDs_across_midline(ordered)
-        afc_results_filtered = filter_comparisons_by_offset(afc_results,600)
-        afc_results_array.append(afc_results_filtered)
-    return afc_results_array
-
-def preprocess_relative_comparisons_by_offset(np_data_array,
-                                              man_ver="DEFAULTVAL",
-                                              training_condition = "",
-                                              iteration="DEFUALTVAL"):
-    offsets = set(abs(np_data_array[0][:,1])) - {0}
-    for offset in offsets:
-        afc_results_array = []
-        for np_data in np_data_array:
-            ordered = split_ITD_tone_groups_1octv(np_data)
-            afc_results = compare_ITDs_across_midline(ordered)
-            afc_results_filtered = filter_comparisons_by_offset_equal(afc_results,
-                                                                min_cutoff=offset,
-                                                                max_cutoff=offset)
-            afc_results_array.append(afc_results_filtered)
-        plot_relative_comparison_acc_multiple_lines(afc_results_array)
-        plt.savefig(plots_folder+"/"+"man_added_{}offset_collapsed_freqs_across_midline_{}full_tones_jitteredPhase_no_hanning_trained_valid_padded_naturalSoundsReveb{}_sparse_textures_iter{}k_foldfix_collapsedArchitectures_dictdatapassing.png".format(offset,man_ver,training_condition,iteration))
-    
-def preprocess_relative_comparisons_by_offset_interpolated(np_data_array,
-                                              man_ver="DEFAULTVAL",
-                                              iteration="DEFUALTVAL"):
-    offsets = set(abs(np_data_array[0][:,1])) - {0}
-    for offset in offsets:
-        afc_results_array = []
-        for np_data in np_data_array:
-            ordered = split_ITD_tone_groups_1octv_abs(np_data)
-            afc_results = compare_ITDs_across_midline(ordered)
-            afc_results_filtered = filter_comparisons_by_offset_equal(afc_results,
-                                                                min_cutoff=offset,
-                                                                max_cutoff=offset)
-            afc_results_array.append(afc_results_filtered)
-        plot_relative_comparison_acc_multiple_lines(afc_results_array)
-        plt.savefig(plots_folder+"/"+"man_added_{}offset_collapsed_freqs_across_midline_interpolated_{}full_tones_jitteredPhase_no_hanning_trained_valid_padded_naturalSoundsReveb_sparse_textures_iter{}k_foldfix_collapsedArchitectures_dictdatapassing.png".format(offset,man_ver,iteration))
-
-def preprocess_relative_comparisons_for_envelopes(np_data_array, 
-                                                  carrier_list=None):
-    afc_results_array = []
-    for np_data in np_data_array:
-        ordered,freqs = split_sam_tones_by_modulator_freq(np_data)
-        afc_results = compare_sam_tones_across_midline(ordered)
-        if carrier_list is not None:
-            afc_results = filter_comparisons_by_carrier(afc_results,carrier_list,jitter_distance_octave_fraction=.1)
-        #afc_results_filtered = filter_comparisons_by_offset(afc_results,30)
-        afc_results_array.append(afc_results)
-    return freqs,afc_results_array
-
-def preprocess_relative_comparisons_for_transposed_envelopes(np_data_array, 
-                                                  carrier_list=None):
-    afc_results_array = []
-    for np_data in np_data_array:
-        ordered,freqs = split_sam_tones_by_modulator_freq(np_data)
-        afc_results = compare_transposed_tones_across_midline(ordered)
-        if carrier_list is not None:
-            afc_results = filter_comparisons_by_carrier(afc_results,carrier_list)
-        #afc_results_filtered = filter_comparisons_by_offset(afc_results,30)
-        afc_results_array.append(afc_results)
-    return freqs,afc_results_array
-
-
-def plot_ILD_comparison(batch_condtionals_tone):
-    test_split_ILD = split_ITD_tone_groups(test_ILD)
-    print("Running Comparison...")
-    results_ILD = compare_ITDs(test_split_ILD,min_dist=11,max_dist=30)
-    plot_relative_comparison_acc(results_ILD)
-    plt.savefig(plots_folder+"/"+"ILD_diff11-30_2AFC.png") 
-
-def plot_ITD_comparison(batch_condtionals_tone):
-    test_split_ILD = split_ITD_tone_groups(batch_condtionals_tone)
-    print("Running Comparison...")
-    results_ILD = compare_ITDs(test_split_ILD,min_dist=0,max_dist=4)
-    plot_relative_comparison_acc(results_ILD)
-    plt.savefig(plots_folder+"/"+"ITD_diff0-40_2AFC.png") 
-
-
-def plot_cond_prob_azim_folded_manual_ILD(batch_conditionals):
-    ILD_list = [-20,-15,-10,-5,0,5,10,15,20]
-    x_axis = [i for i in range(90,280,10)]
-    fig, ax = plt.subplots(nrows = 3, ncols = 3, figsize=(30,30))
-    for azim in ILD_list:
-        row = ILD_list.index(azim)//3
-        col = ILD_list.index(azim)%3
-        a = [i[0][:36]/sum(i[0][:36]) for i in batch_conditionals if i[1] == azim] 
-        azim_degrees = azim*10
-        if azim_degrees > 270 or azim_degrees < 90:
-            reversal_point = round(math.degrees(math.acos(-math.cos(math.radians((azim_degrees+azim_degrees//180*180)%360))))+azim_degrees//180*180)
-        else:
-            reversal_point =  azim_degrees
-        np_a = np.array(a)
-        folded = fold_locations_full_dist(np_a)
-        folded_means,bottom_error,top_error = calc_CI(folded)
-        ax[row][col].errorbar(x_axis,folded_means,yerr=[bottom_error,top_error],marker='o',markersize=2,linestyle='-')
-        ax[row][col].set_title("Sounds at {}dB ILD".format(azim))
-        ax[row][col].set_ylabel("Conditional Probability")
-        ax[row][col].set_xlabel("Degrees")
-        ax[row][col].set_ylim(0.0,1.0)
-        ax[row][col].set_xticks([90,135,180,225,270])
-        #ax[azim//6][azim%6].axvline(x=reversal_point, color='k', linestyle='--')
-
-    plt.subplots_adjust(top=0.92, bottom=0.08, left=0.10, right=0.95, hspace=0.35,
-                        wspace=0.65)
-
-def plot_cond_prob_azim_folded_manual_ITD(batch_conditionals):
-    ILD_list = [-30,-20,-15,-10,-5,0,5,10,15,20,30]
-    x_axis = [i for i in range(90,280,10)]
-    fig, ax = plt.subplots(nrows = 4, ncols = 3, figsize=(30,30))
-    for azim in ILD_list:
-        row = ILD_list.index(azim)//3
-        col = ILD_list.index(azim)%3
-        a = [i[0][:36]/sum(i[0][:36]) for i in batch_conditionals if i[1] == azim] 
-        azim_degrees = azim*10
-        if azim_degrees > 270 or azim_degrees < 90:
-            reversal_point = round(math.degrees(math.acos(-math.cos(math.radians((azim_degrees+azim_degrees//180*180)%360))))+azim_degrees//180*180)
-        else:
-            reversal_point =  azim_degrees
-        np_a = np.array(a)
-        folded = fold_locations_full_dist(np_a)
-        folded_means,bottom_error,top_error = calc_CI(folded)
-        ax[row][col].errorbar(x_axis,folded_means,yerr=[bottom_error,top_error],marker='o',markersize=2,linestyle='-')
-        ax[row][col].set_title("Sounds at {} samples offset".format(azim))
-        ax[row][col].set_ylabel("Conditional Probability")
-        ax[row][col].set_xlabel("Degrees")
-        ax[row][col].set_ylim(0.0,1.0)
-        ax[row][col].set_xticks([90,135,180,225,270])
-        #ax[azim//6][azim%6].axvline(x=reversal_point, color='k', linestyle='--')
-
-    plt.subplots_adjust(top=0.92, bottom=0.08, left=0.10, right=0.95, hspace=0.35,
-                        wspace=0.65)
-
 def make_yost_localization_by_azim():
     pd_yost =  pd.read_csv("/om/user/francl/Data_Fig_7.csv",header=[0])
     pd_yost_pivoted = pd_yost.set_index('Band-Pass').stack().reset_index()
@@ -1938,7 +1222,7 @@ def make_yost_localization_by_azim():
     plt.ylim(-105,105)
     plt.yticks([-90,-60,-30,0,30,60,90])
     plt.xticks(list(range(-1,12)),list(range(-90,105,15)))
-    plt.savefig(plots_folder+"/yost_frontal_localization_human.png",dpi=400)
+    plt.savefig(plots_folder+"/yost_frontal_localization_human.svg")
     
     
 
@@ -1949,14 +1233,14 @@ def format_kulkarni_human_data():
     plt.clf()
     plt.figure(figsize=(10,10),dpi=200)
     order=[1024,512,256,128,64,32,16,8,4,2,1]
-    sns.pointplot(x="Smooth Factor", y="Y",order=order,data=pd_kulkarni)
+    sns.pointplot(x="Smooth Factor", y="Y",markers=[""],color="k",order=order,data=pd_kulkarni)
     plt.ylim(45,100)
     plt.ylabel("Correct (%)",fontsize=30)
     plt.xlabel("Smooth Factor",fontsize=30)
     plt.yticks(fontsize=30)
     plt.xticks(range(len(order)),order,fontsize=30,rotation=45)
-    plt.text(0.25,0.90,"0 Degrees",fontsize=35,transform=plt.gca().transAxes)
-    plt.axhline(5,color='k',linestyle='dashed',alpha=0.5)
+    #plt.text(0.25,0.90,"0 Degrees",fontsize=35,transform=plt.gca().transAxes)
+    #plt.axhline(5,color='k',linestyle='dashed',alpha=0.5)
     plt.tight_layout()
     return pd_kulkarni
 
@@ -1972,7 +1256,8 @@ def format_middlebrooks_human_data():
     pd_middlebrooks = pd_middlebrooks[cols]
     return pd_middlebrooks
 
-def format_data_wood_human_data(human_data_csv=None,add_errorbars=False):
+def format_data_wood_human_data(human_data_csv=None,add_errorbars=False,
+                                return_pd=False):
     plt.clf()
     if human_data_csv is None:
         human_data_csv = "/om/user/francl/wood_localization_data.csv"
@@ -1984,8 +1269,6 @@ def format_data_wood_human_data(human_data_csv=None,add_errorbars=False):
     pd_y_col = pd_wood_broadband["Y"]
     if add_errorbars:
         pd_wood_broadband =pd_wood_broadband.reset_index()
-        pd_top = pd_wood.loc[slice(None),("Broadband Noise Top Error",slice(None))]
-        pd_top.columns = pd_top.columns.droplevel(0)
         pd_wood_broadband["YErr_top"] = pd_top.sort_values(["X"],ascending=True)["Y"]
         pd_bottom = pd_wood.loc[slice(None),("Broadband Noise Bottom Error",slice(None))]
         pd_bottom.columns = pd_bottom.columns.droplevel(0)
@@ -1999,10 +1282,13 @@ def format_data_wood_human_data(human_data_csv=None,add_errorbars=False):
         sns.lineplot(x="X",y="Y",data=pd_wood_broadband)
     plt.ylabel("d'",fontsize=20)
     plt.ylim(3.4,0.6)
+    plt.xlim(-95,95)
     plt.xlabel("Source Azimuth (Degrees)",fontsize=20)
     plt.yticks([1,2,3],fontsize=15)
-    plt.xticks([-50,0,50],fontsize=15,rotation=45)
+    plt.xticks([-90,-45,0,45,90],fontsize=15,rotation=45)
     plt.tight_layout()
+    if return_pd:
+        return pd_wood_broadband
     #pd_wood_broadband["Y"]=(pd_y_col-pd_y_col.min())/(pd_y_col.max()-pd_y_col.min())
     
 def make_wood_network_plot(regex=None):
@@ -2011,10 +1297,88 @@ def make_wood_network_plot(regex=None):
                  "batch_conditional_broadbandNoiseRecords_wood_convolved_anechoic_"
                  "oldHRIRdist140_stackedCH_upsampled_iter100000*")
     np_data_array_dictionary = getDatafilenames(regex)
+    #filter for sounds rendered only at 0 elevation
+    np_data_array_dictionary_filtered = [net_preds[net_preds[:,2] == 0] for net_preds in
+                                np_data_array_dictionary]
     plt.clf()
-    plot_means_squared_error_by_freq(np_data_array_dictionary,azim_lim=72,
+    plot_means_squared_error_by_freq(np_data_array_dictionary_filtered,azim_lim=72,
                                      bins_5deg=True,collapse_conditions=True)
+    plt.ylim(0,12)
     plt.savefig(plots_folder+"/azimuth_vs_error_wood_graph_network.png")
+
+def get_wood_bizley_snr_threshold_per_architecture(pd_wood_bizley):
+    pd_wood_bizley_by_arch = pd_wood_bizley.groupby("arch_index")
+    query_trial_count = "azim_folded == -90 or azim_folded == 90"
+    query_L_errors = "azim_folded == -90 and predicted_azim_folded >= 0"
+    query_R_errors = "azim_folded == 90 and predicted_azim_folded <= 0"
+    snr_threshold = []
+    for arch_index,df_arch in pd_wood_bizley_by_arch:
+        pd_wood_bizley_one_arch_by_snr = df_arch.groupby("snr")
+        max_sorted_keys = sorted(pd_wood_bizley_one_arch_by_snr.groups.keys(),reverse=True)
+        for snr in max_sorted_keys:
+            df_snr = pd_wood_bizley_one_arch_by_snr.get_group(snr)
+            L_error_count = df_snr.query(query_L_errors).shape[0]
+            R_error_count = df_snr.query(query_R_errors).shape[0]
+            trial_count = df_snr.query(query_trial_count).shape[0]
+            if float(L_error_count + R_error_count)/trial_count >= .05:
+                snr_threshold.append((arch_index,snr))
+                break
+    return snr_threshold
+
+def get_snr_threshold_trials(pd_wood_bizley,snr_threshold):
+    pd_wood_bizley["calibrated_SNR_trial"] = False
+    for arch_index,snr in snr_threshold:
+        idx = (pd_wood_bizley["arch_index"] == arch_index) & (pd_wood_bizley["snr"] == snr)
+        pd_wood_bizley.loc[idx,"calibrated_SNR_trial"] = True
+    return pd_wood_bizley
+
+
+def make_wood_bizley_network_plot(regex=None):
+    if regex is None:
+        regex = ("/om5/user/francl/grp-om2/gahlm/dataset_pipeline_test/arch_number_*init_0/"
+                 "batch_conditional_*_wood_bizley_03092022_iter100000*")
+    pd_wood_bizley = make_dataframe(regex,elevation_predictions=True)
+    pd_wood_bizley = format_wood_bizley_dataframe(pd_wood_bizley)
+    #query breaks with negative numbers in this version of pandas
+    snr_threshold = get_wood_bizley_snr_threshold_per_architecture(pd_wood_bizley)
+    pd_wood_bizley_filtered = get_snr_threshold_trials(pd_wood_bizley,snr_threshold)
+    #snr_val = -8
+    #pd_wood_bizley_arch_mean = (pd_wood_bizley.query("snr == @snr_val")
+    #                            .groupby(["azim_folded","arch_index","snr"])
+    #                            ["azim_error_folded_abs"].mean().reset_index())
+    pd_wood_bizley_arch_mean = (pd_wood_bizley_filtered
+                                .query("calibrated_SNR_trial == True")
+                                .groupby(["azim_folded","arch_index","snr"])
+                                ["azim_error_folded_abs"].mean().reset_index())
+    plt.clf()
+    sns.lineplot(x="azim_folded",y="azim_error_folded_abs",data=pd_wood_bizley_arch_mean,
+              ci=68,err_style="bars",color='black',lw=3.1,
+              err_kws={'capsize':0.1,'elinewidth':3,'capthick':0.1})
+    plt.xticks([-90,-45,0,45,90])
+    plt.xlim(-95,95)
+    plt.ylim(0,30)
+    #sns.lineplot(x="azim_folded",y="azim_error_folded_abs",data=pd_wood_bizley_arch_mean,
+    #          units="arch_index",estimator=None)
+    pd_wood_bizley = pd_wood_bizley_arch_mean.groupby("azim_folded")["azim_error_folded_abs"].mean().reset_index()
+    pd_wood_bizley.columns = ['X', 'Y']
+    plt.savefig(plots_folder+"/azimuth_vs_error_wood_graph_network.png")
+    return pd_wood_bizley
+
+def format_wood_bizley_dataframe(pd_wood_bizley):
+    if pd_wood_bizley['azim'].dtype != 'int64':
+        pd_wood_bizley['azim'] = pd_wood_bizley['azim'].apply(convert_from_numpy)
+        pd_wood_bizley['elev'] = pd_wood_bizley['elev'].apply(convert_from_numpy)
+        pd_wood_bizley = pd_wood_bizley.convert_objects(convert_numeric=True)
+    pd_wood_bizley = pd_wood_bizley.query("azim <=18 or azim >= 54")
+    pd_wood_bizley['predicted_elev'] = None
+    pd_wood_bizley['predicted_elev'] = None
+    pd_wood_bizley['predicted_elev'] = pd_wood_bizley['predicted'].apply(lambda x: x//72)
+    pd_wood_bizley['predicted_azim'] = pd_wood_bizley['predicted'].apply(lambda x: x%72)
+    pd_wood_bizley['predicted_azim_folded'] = pd_wood_bizley['predicted_azim'].apply(CIPIC_azim_folding)
+    pd_wood_bizley['azim_folded'] = pd_wood_bizley['azim'].apply(CIPIC_azim_folding)
+    pd_wood_bizley['azim_error_folded'] = pd_wood_bizley['azim_folded'] - pd_wood_bizley['predicted_azim_folded']
+    pd_wood_bizley['azim_error_folded_abs'] = pd_wood_bizley['azim_error_folded'].abs()
+    return pd_wood_bizley
 
 def get_data_from_graph(idx=None,use_points=False):
     lines = plt.gca().get_lines()
@@ -2091,6 +1455,22 @@ def get_wood_correlations(network_regex=None,bootstrap_mode=False):
                                               pd_wood_network_subset_norm)
     return (kendall_tau,spearman_r,rmse)
 
+def get_wood_bizley_correlations_updated(network_regex=None,bootstrap_mode=False):
+    format_data_wood_human_data()
+    pd_wood_human = get_data_from_graph()
+    pd_wood_network = make_wood_bizley_network_plot(network_regex)
+    pd_network_intersection = pd_wood_network["X"].isin(pd_wood_human["X"])
+    pd_wood_network_subset = pd_wood_network[pd_network_intersection]
+    if bootstrap_mode:
+        return pd_wood_human,pd_wood_network_subset
+    #flip network data and normalize
+    pd_wood_network_subset["Y"] = pd_wood_network_subset["Y"].apply(lambda x:x*-1)
+    pd_wood_network_subset_norm = pd_normalize_column(pd_wood_network_subset)
+    pd_wood_human_norm = pd_normalize_column(pd_wood_human)
+    (kendall_tau,spearman_r,rmse) = get_stats(pd_wood_human_norm,
+                                              pd_wood_network_subset_norm)
+    return (kendall_tau,spearman_r,rmse)
+
 def make_yost_network_plot(regex=None):
     if regex is None:
         regex = ("/om2/user/francl/grp-om2/gahlm/dataset_pipeline_test/arch_number_*_init_0/"
@@ -2106,7 +1486,7 @@ def get_wood_correlations_bootstrapped(network_regex=None,model_choices=None):
     fnames = sorted(glob(network_regex))
     model_data = []
     for model in fnames:
-        pd_human,pd_model = get_wood_correlations(network_regex=model,bootstrap_mode=True)
+        pd_human,pd_model = get_wood_bizley_correlations_updated(network_regex=model,bootstrap_mode=True)
         model_data.append(pd_model)
     pd_wood_human_norm = pd_normalize_column(pd_human)
     rmse_list = []
@@ -2114,11 +1494,22 @@ def get_wood_correlations_bootstrapped(network_regex=None,model_choices=None):
         pd_model_sample = pd.concat([model_data[i] for i in model_idx])
         pd_model_mean = pd_model_sample.groupby(pd_model_sample.index).mean()
         pd_model_mean["Y"] = pd_model_mean["Y"].apply(lambda x:x*-1)
-        pd_wood_network_subset_norm = pd_normalize_column(pd_model_mean)
+        try:
+            pd_wood_network_subset_norm = pd_normalize_column(pd_model_mean)
+        except:
+            pdb.set_trace()
         (kendall_tau,spearman_r,rmse) = get_stats(pd_wood_human_norm,
                                                   pd_wood_network_subset_norm)
         rmse_list.append(rmse)
     return rmse_list
+
+def model_wood(network_regex=None,model_choices=None):
+    fnames = sorted(glob(network_regex))
+    model_data = []
+    for model in fnames:
+        pd_human,pd_model = get_wood_correlations(network_regex=model,bootstrap_mode=True)
+        model_data.append(pd_model)
+    pdb.set_trace()
 
 
 def get_yost_correlations_bootstrapped(network_regex=None,model_choices=None):
@@ -2142,6 +1533,14 @@ def get_yost_correlations_bootstrapped(network_regex=None,model_choices=None):
         rmse_list.append(rmse)
     return rmse_list
 
+def model_middlebrooks(network_regex=None,model_choices=None):
+    fnames = sorted(glob(network_regex))
+    model_data = []
+    for model in fnames:
+        pd_human,pd_model = get_middlebrooks_correlations(regex=model,bootstrap_mode=True)
+        model_data.append((pd_model[0].reset_index(),pd_model[1].reset_index()))
+    pdb.set_trace()
+
 
 def get_middlebrooks_correlations_bootstrapped(network_regex=None,
                                               model_choices=None):
@@ -2159,8 +1558,18 @@ def get_middlebrooks_correlations_bootstrapped(network_regex=None,
         pd_model_sample_ILD = pd.concat([model_data[i][1] for i in model_idx])
         pd_model_mean_ITD = pd_model_sample_ITD.groupby(pd_model_sample_ITD.index).mean()
         pd_model_mean_ILD = pd_model_sample_ILD.groupby(pd_model_sample_ILD.index).mean()
-        pd_model_mean_ITD['human'] = pd_human_ITD
-        pd_model_mean_ILD['human'] = pd_human_ILD
+        try:
+            pd_model_mean_ITD['human'] = pd_human_ITD
+        except:
+            pd_model_sample_ITD = pd.concat([model_data[i][0] for i in range(10)])
+            pd_model_mean_ITD = pd_model_sample_ITD.groupby(pd_model_sample_ITD.index).mean()
+            pd_model_mean_ITD['human'] = pd_human_ITD
+        try:
+            pd_model_mean_ILD['human'] = pd_human_ILD
+        except:
+            pd_model_sample_ILD = pd.concat([model_data[i][1] for i in range(10)])
+            pd_model_mean_ILD = pd_model_sample_ILD.groupby(pd_model_sample_ILD.index).mean()
+            pd_model_mean_ILD['human'] = pd_human_ILD
         pd_model_ITD_norm = pd_normalize_column(pd_model_mean_ITD,
                                                 columns=['Y','human'],
                                                 norm_across_cols=True,
@@ -2256,7 +1665,7 @@ def get_litovsky_correlations_bootstrapped(network_regex=None,
     return rmse_list
 
 def get_litovsky_correlations_bootstrapped_multi_azim(network_regex=None,
-                                           model_choices=None):
+                                                      model_choices=None):
     assert model_choices is not None
     fnames = sorted(glob(network_regex))
     model_data = []
@@ -2279,7 +1688,7 @@ def get_litovsky_correlations_bootstrapped_multi_azim(network_regex=None,
         rmse_list.append(rmse)
     return rmse_list
 
-@lru_cache(maxsize=10)
+@lru_cache(maxsize=30)
 def bootstrap_plots(regex_folder,random_seed=0,num_iterations=10000,
                     model_num=None,iter_num=100000):
     np.random.seed(random_seed)
@@ -2294,9 +1703,8 @@ def bootstrap_plots(regex_folder,random_seed=0,num_iterations=10000,
         raise ValueError("Either num_iterations (int) or bootstrapped_choices"
                          "(list) msut be set")
 
-    wood_regex = (regex_folder+"arch_number_*init_0/batch_conditional_"
-                  "broadbandNoiseRecords_wood_convolved_anechoic_"
-                  "oldHRIRdist140_stackedCH_upsampled_iter{}*".format(iter_num))
+    wood_regex = (regex_folder+"arch_number_*init_0/batch_conditional_*"
+                  "_wood_bizley_03092022_iter{}*".format(iter_num))
     yost_regex = (regex_folder+"arch_number_*init_0/batch_conditional*bandpass"
                   "*HRIR*iter{}.npy".format(iter_num))
     middlebrooks_regex = (regex_folder+"arch_number_*init_0/batch_conditional_"
@@ -2309,6 +1717,8 @@ def bootstrap_plots(regex_folder,random_seed=0,num_iterations=10000,
                         "convolvedCIPIC*iter{}.npy".format(iter_num))
     litovsky_regex = (regex_folder+"arch_number_*init_0/batch_conditional_*"
                       "precedence*multiAzim*pinknoise*5degStep*iter{}*".format(iter_num))
+    hebrank_wright_regex = (regex_folder+"arch_number_*_init_0/batch_conditional_"
+                            "noiseRecords_hebrank_wright_iter{}.npy".format(iter_num))
     print("Starting Wood")
     rmse_wood = get_wood_correlations_bootstrapped(network_regex=wood_regex,
                                                    model_choices=bootstrapped_choices)
@@ -2330,10 +1740,16 @@ def bootstrap_plots(regex_folder,random_seed=0,num_iterations=10000,
     rmse_litovsky = get_litovsky_correlations_bootstrapped_multi_azim(
                                                    network_regex=litovsky_regex,
                                                    model_choices=bootstrapped_choices)
+    print("Starting Hebrank and Wright")
+    rmse_hebrank_wright = get_hebrank_wright_correlations_bootstrapped(
+                                                   network_regex=hebrank_wright_regex,
+                                                   model_choices=bootstrapped_choices)
+
     van_opstal_added = [sum(x) for x in zip(rmse_van_opstal_x,rmse_van_opstal_y)]
     output_dict = {'wood':rmse_wood,'yost':rmse_yost,'ITD':rmse_middlebrooks_ITD,
                    'ILD':rmse_middlebrooks_ILD,'kulkarni':rmse_kulkarni,
-                   'van_opstal':van_opstal_added,'litovsky':rmse_litovsky}
+                   'van_opstal':van_opstal_added,'litovsky':rmse_litovsky,
+                   'hebrank_wright':rmse_hebrank_wright}
     return output_dict
     
 
@@ -2406,13 +1822,16 @@ def get_individual_error_graph(regex_folder_list,iter_nums=100000,condtion_names
                                var_name='Training Condition',
                                value_name="Network-Human Error")
     plt.clf()
+    plt.yticks([0.0,0.05,0.1,0.15,0.2,0.25,0.3])
+    plt.ylim(0,0.34)
     new_palette = ["#97B4DE","#785EF0","#DC267F","#FE6100"]
     sns.barplot(x="Training Condition",y="Network-Human Error",ci='sd',
                 palette=sns.color_palette(new_palette),data=pd_raw_error)
-    name = plots_folder+"/mean_error_by_training_condition.png"
-    plt.yticks([0.0,0.05,0.1,0.15,0.2,0.25])
+    pd_raw_error.to_csv(plots_folder+"/mean_error_by_training_condition.csv")
+    name = plots_folder+"/mean_error_by_training_condition.svg"
+    #plt.yticks([0.0,0.05,0.1,0.15,0.2,0.25])
     plt.tight_layout()
-    plt.savefig(name,dpi=400)
+    plt.savefig(name)
     cols_models = []
     models_raw = []
     models_mean_list = []
@@ -2429,6 +1848,7 @@ def get_individual_error_graph(regex_folder_list,iter_nums=100000,condtion_names
     pd_models_error['Training Condition'] = pd_models_error['Training Condition'].apply(lambda x:
                                                                    idx_lookup[x])
     plt.clf()
+    pd_models_error.to_csv(plots_folder+"/individual_model_error_by_training_condition.csv")
     sns.lineplot(x='Training Condition',y="Network-Human Error",
                 units="index",estimator=None, lw=2.5,ms=5,
                 data=pd_models_error,style="index",
@@ -2438,8 +1858,8 @@ def get_individual_error_graph(regex_folder_list,iter_nums=100000,condtion_names
     plt.ylim(0,.41)
     plt.yticks([0,0.1,0.2,0.3,0.4])
     plt.tight_layout()
-    name = plots_folder+"/individual_model_error_by_training_condition.png"
-    plt.savefig(name,dpi=400)
+    name = plots_folder+"/individual_model_error_by_training_condition.svg"
+    plt.savefig(name)
 
     
 def get_error_graph_by_task(regex_folder_list,condtion_names=None,iter_nums=100000,model_num=10):
@@ -2465,7 +1885,6 @@ def get_error_graph_by_task(regex_folder_list,condtion_names=None,iter_nums=1000
                                         return_exp_order=True)
     m,n,r = np_bootstraps.shape
     np_pd_formatting = np.column_stack((np.repeat(np.arange(m),n),np_bootstraps.reshape(m*n,-1)))
-    pdb.set_trace()
     condtion_names_exp = ['Experiment IDX']+condtion_names
     pd_raw = pd.DataFrame(data=np_pd_formatting,columns=condtion_names_exp)
     pd_raw_error = pd_raw.melt(id_vars=['Experiment IDX'],value_vars=condtion_names,
@@ -2497,7 +1916,8 @@ def get_error_graph_by_task(regex_folder_list,condtion_names=None,iter_nums=1000
                                                                    idx_lookup[x])
     np.random.seed(random_seed)
     def std_ddof(x): return np.std(x,ddof=1)
-    idxs = [[choices+offset for offset in range(0,70,10)] for choices in np.random.choice(10,(bootstrap_iterations,10))]
+    idxs = [[choices+offset for offset in range(0,(10*len(col_order)),10)]
+                for choices in np.random.choice(10,(bootstrap_iterations,10))]
     np_idxs= np.array(idxs).reshape(bootstrap_iterations,-1)
     pd_stats_list = []
     pd_stats_diff_list = []
@@ -2506,10 +1926,8 @@ def get_error_graph_by_task(regex_folder_list,condtion_names=None,iter_nums=1000
         #pd_diff_subset = (pd_models.iloc[np_idx].apply(get_diff_by_model,axis=1)
         #                  .groupby(['Experiment IDX']).agg([np.mean,std_ddof]))
         pd_stats = pd_subset.apply(cohens_d_by_model,axis=1)
-        #pd_stats_diff = pd_diff_subset.apply(cohens_d_diff_by_model,axis=1)
         pd_stats_list.append(pd_stats.loc[:,(slice(None),'cohens_d')])
-        #pd_stats_diff_list.append(pd_stats_diff.loc[:,(slice(None),'cohens_d')])
-        print(i)
+        if i%500==0: print(i)
     pd_stats_all = pd.concat(pd_stats_list)
     pd_stats_melted = pd_stats_all.loc[:,(slice(None),'cohens_d')].stack(level=[0]).reset_index()
     pd_stats_melted["Experiment"] = pd_stats_melted['Experiment IDX'].apply(lambda
@@ -2518,33 +1936,39 @@ def get_error_graph_by_task(regex_folder_list,condtion_names=None,iter_nums=1000
     colors = sns.color_palette('colorblind')
     del colors[4]
     del colors[4]
+    colors=[colors[2],colors[3],colors[0],colors[1],colors[5],colors[4],colors[7],colors[6]]
+    hue_order = ['ITD', 'ILD', 'wood', 'yost', 'van_opstal',
+                 'kulkarni','hebrank_wright','litovsky']
     plt.figure(figsize=(10,8))
     sns.barplot(x='Training Condition',y='cohens_d',hue='Experiment',
-                ci='sd',data=pd_stats_melted,palette=colors)
+                hue_order=hue_order,ci='sd',data=pd_stats_melted,palette=colors)
     plt.xticks([0,1,2],["Anechoic","No Background", "Unnatural"])
     plt.ylabel("Cohen's D")
     plt.ylim(-7,7)
     plt.gca().get_legend().remove()
     plt.tight_layout()
-    plt.savefig(plots_folder+"/cohens_d_by_training_cond_and_experiment_sem.png",dpi=400)
+    pd_stats_melted.to_csv(plots_folder+"/cohens_d_by_training_cond_and_experiment_sem.csv")
+    plt.savefig(plots_folder+"/cohens_d_by_training_cond_and_experiment_sem.svg")
     plt.clf()
-    plt.figure()
+    plt.figure(figsize=(10,8))
+    pdb.set_trace()
     for exp in col_order:
         plt.clf()
         pd_models_error_subset= pd_models_error.query("Experiment == @exp")
         pd_raw_error_subset= pd_raw_error.query("Experiment == @exp")
         sns.barplot(x="Training Condition",y="Network-Human Error",ci='sd',
                                  order=condtion_names,data=pd_raw_error_subset)
+        pdb.set_trace()
         sns.lineplot(x='Training Condition',y="Network-Human Error",
                     units="model_index",estimator=None, lw=2,ms=4,
                     data=pd_models_error_subset,style="model_index",
                     markers=["o","o","o","o","o","o","o","o","o","o"],
                     dashes=False,alpha=0.4)
         plt.gca().get_legend().remove()
-        plt.title("Network-Human Error for {} Experiment".format(exp))
+        #plt.title("Network-Human Error for {} Experiment".format(exp))
         plt.tight_layout()
         name = plots_folder+("/network_human_error_by_training_cond"
-                             "_experriment_{}.png".format(exp))
+                             "_experriment_{}.svg".format(exp))
         plt.savefig(name)
 
 
@@ -2615,7 +2039,307 @@ def gauss(x, *p):
     A, mu, sigma = p
     return A*np.exp(-(x-mu)**2/(2.*sigma**2))
 
+class ChainedAssignment:
+    def __init__(self, chained=None):
+        acceptable = [None, 'warn', 'raise']
+        assert chained in acceptable, "chained must be in " + str(acceptable)
+        self.swcw = chained
+    def __enter__(self):
+        self.saved_swcw = pd.options.mode.chained_assignment
+        pd.options.mode.chained_assignment = self.swcw
+        return self
+    def __exit__(self, *args):
+        pd.options.mode.chained_assignment = self.saved_swcw
 
+def fit_gauss_to_wood(bs_size=10000,return_dist=False):
+   pd_wood_gaussian = format_data_wood_human_data("/om/user/francl/wood_localization_errorbar.csv",
+                                               add_errorbars=True,return_pd=True)
+   #Origianl dta was SEM so the width should be 2x SD of mean
+   pd_wood_gaussian["SD"] = (pd_wood_gaussian["YErr_top"] - pd_wood_gaussian["YErr_bottom"])/2.0
+   mean = pd_wood_gaussian["Y"]
+   cov = np.diag(pd_wood_gaussian["SD"].pow(2))
+   samples = np.random.multivariate_normal(mean,cov,size=bs_size)
+   samples_pd_wide = pd.DataFrame(data=samples,columns=pd_wood_gaussian["X"])
+   samples_pd = samples_pd_wide.stack(level=0).reset_index()
+   samples_pd.rename({"level_0":"idx",0:"Y"},axis=1,inplace=True)
+   pd_wood_human_norm = pd_normalize_column(pd_wood_gaussian)
+   rmse_list = []
+   with ChainedAssignment():
+       for idx,sample_mean in samples_pd.groupby(["idx"]):
+           pd_sample_norm = pd_normalize_column(sample_mean)
+           (kendall_tau,spearman_r,rmse) = get_stats(pd_wood_human_norm,pd_sample_norm)
+           rmse_list.append(rmse)
+           if idx%500 ==0:print(idx)
+   if return_dist:
+       return rmse_list
+   rmse_list.sort()
+   bootstrapped_mean = sum(rmse_list)/len(rmse_list)
+   ci_5,ci_95 = rmse_list[int(bs_size*.05)],rmse_list[int(bs_size*.95)]
+   return ci_5,bootstrapped_mean,ci_95
+    
+def combine_gaussians(pd_series):
+    #This calculates a new gaussian distribution that
+    #represents the mean of the previous random variables.
+    var_list = []
+    mean_list = []
+    keys = pd_series.index.get_level_values(0).unique()
+    for key in keys:
+        mean_list.append(pd_series.loc[key,'RMS Error (Degrees)'])
+        var_list.append(pd_series.loc[key,'var'])
+    grouped_var = (1/len(keys)**2) * sum(var_list)
+    grouped_mean = (1/len(keys)) * sum(mean_list)
+    pd_series.loc[keys,'grouped_var'] = grouped_var
+    pd_series.loc[keys,'grouped_mean'] = grouped_mean
+    return pd_series
+    
+def fit_gauss_to_broadband_yost(bs_size=10000,return_dist=False):
+
+   pd_yost = make_bandwidth_vs_error_humabn_plot(return_pd=True)
+   pd_yost_mean = (pd_yost.groupby("Bandwidth (Octaves)")["RMS Error (Degrees)"]
+                          .agg([np.mean,'std'])
+                          .reset_index())
+   pd_yost_mean.rename({"mean":"Y"},axis=1,inplace=True)
+   pd_yost["var"] = pd_yost["standard deviation"].pow(2)
+   pd_yost = pd_yost.groupby("Bandwidth (Octaves)").apply(combine_gaussians)
+   pd_yost_grouped = pd_yost.groupby("Bandwidth (Octaves)").mean().reset_index()
+   mean = pd_yost_grouped["grouped_mean"]
+   cov = np.diag(pd_yost_grouped["grouped_var"])
+   samples = np.random.multivariate_normal(mean,cov,size=bs_size)
+   samples_pd_wide = pd.DataFrame(data=samples,
+                                  columns=pd_yost_grouped["Bandwidth (Octaves)"])
+   samples_pd = samples_pd_wide.stack(level=0).reset_index()
+   samples_pd.rename({"level_0":"idx",0:"Y"},axis=1,inplace=True)
+   rmse_list = []
+   with ChainedAssignment():
+       for idx,sample_mean in samples_pd.groupby(["idx"]):
+           sample_mean["human_Y"] = pd_yost_mean["Y"].values
+           pd_data_norm = pd_normalize_column(sample_mean,
+                                           columns=["Y","human_Y"],
+                                           norm_across_cols=True,
+                                           columns_out=["Y_norm","human_norm"])
+           (kendall_tau,spearman_r,rmse) = get_stats(pd_data_norm["Y_norm"],
+                                                     pd_data_norm["human_norm"])
+           rmse_list.append(rmse)
+           if idx%500 ==0:print(idx)
+   if return_dist:
+       return rmse_list
+   rmse_list.sort()
+   bootstrapped_mean = sum(rmse_list)/len(rmse_list)
+   ci_5,ci_95 = rmse_list[int(bs_size*.05)],rmse_list[int(bs_size*.95)]
+   return ci_5,bootstrapped_mean,ci_95
+
+def fit_gauss_to_van_opstal(bs_size=10000,return_dist=False):
+   pd_means_humans_before,pd_ref_human_before = get_van_opstal_human_plot('before')
+   pd_means_humans_after,pd_ref_human_after = get_van_opstal_human_plot('after')
+   pd_human_before_diff = pd_ref_human_before.apply(pd.Series) - pd_means_humans_before['xy'].apply(pd.Series)
+   pd_human_after_diff = pd_ref_human_after.apply(pd.Series) - pd_means_humans_after['xy'].apply(pd.Series)
+   pd_humans = pd.concat([pd_human_before_diff.abs().reset_index(drop=True),
+                          pd_human_after_diff.abs().reset_index(drop=True)])
+   pd_before,pd_after = human_data_sample_helper_van_opstal(pd_means_humans_before,
+                                                            pd_ref_human_before,
+                                                            pd_means_humans_after,
+                                                            pd_ref_human_after)
+   rmse_list = []
+   with ChainedAssignment():
+       for before,after in zip(pd_before.groupby(["idx"]),
+                                  pd_after.groupby(["idx"])):
+           idx = before[0]
+           sample_mean_before = before[1]
+           sample_mean_after = after[1]
+           pd_sample_before_diff = (pd_ref_human_before.apply(pd.Series) - 
+                                     sample_mean_before['xy'].apply(pd.Series).reset_index(drop=True))
+           pd_sample_after_diff = (pd_ref_human_after.apply(pd.Series) - 
+                                    sample_mean_after['xy'].apply(pd.Series).reset_index(drop=True))
+           pd_sample = pd.concat([pd_sample_before_diff.abs().reset_index(drop=True),
+                                  pd_sample_after_diff.abs().reset_index(drop=True)])
+           pd_humans_norm = pd_normalize_column(pd_humans,columns=[0,1],
+                                                columns_out=['x','y'],
+                                               norm_across_cols=True)
+           pd_sample_norm = pd_normalize_column(pd_sample,
+                                                  columns=[0,1],
+                                                  columns_out=['x','y'],
+                                                 norm_across_cols=True)
+           stats_x = get_stats(pd_humans_norm,pd_sample_norm,
+                                      col="x")
+           stats_y = get_stats(pd_humans_norm,pd_sample_norm,
+                                  col="y")
+           rmse_list.append(stats_x[2]+stats_y[2])
+           if idx%500 ==0:print(idx)
+   if return_dist:
+       return rmse_list
+   rmse_list.sort()
+   bootstrapped_mean = sum(rmse_list)/len(rmse_list)
+   ci_5,ci_95 = rmse_list[int(bs_size*.05)],rmse_list[int(bs_size*.95)]
+   return ci_5,bootstrapped_mean,ci_95
+
+def human_data_sample_helper_van_opstal(pd_means_humans_before,pd_ref_human_before,
+                                        pd_means_humans_after,pd_ref_human_afer,bs_size=10000):
+    #converting 95% CI
+    pd_means_humans_before["var_y"] = pd_means_humans_before["yerr"].apply(lambda x: (1/1.96*sum(x)/len(x))**2)
+    pd_means_humans_before["var_x"] = pd_means_humans_before["xerr"].apply(lambda x: (1/1.96*sum(x)/len(x))**2)
+    pd_means_humans_after["var_y"] = pd_means_humans_after["yerr"].apply(lambda x: (1/1.96*sum(x)/len(x))**2)
+    pd_means_humans_after["var_x"] = pd_means_humans_after["xerr"].apply(lambda x: (1/1.96*sum(x)/len(x))**2)
+    before_mean_y = pd_means_humans_before["y"]
+    before_mean_x = pd_means_humans_before["x"]
+    after_mean_y = pd_means_humans_after["y"]
+    after_mean_x = pd_means_humans_after["x"]
+    before_cov_x = np.diag(pd_means_humans_before["var_x"])
+    before_cov_y = np.diag(pd_means_humans_before["var_y"])
+    after_cov_x = np.diag(pd_means_humans_after["var_x"])
+    after_cov_y = np.diag(pd_means_humans_after["var_y"])
+
+    #
+    before_samples_x = np.random.multivariate_normal(before_mean_x,
+                                                     before_cov_x,size=bs_size)
+    pd_before_x = pd.DataFrame(data=before_samples_x,
+                                   columns=pd_means_humans_before.index.values)
+    pd_before_x = pd_before_x.stack(level=0).reset_index()
+    pd_before_x.rename({"level_0":"idx",0:"X"},axis=1,inplace=True)
+
+    #
+    before_samples_y = np.random.multivariate_normal(before_mean_y,
+                                                     before_cov_y,size=bs_size)
+    pd_before_y = pd.DataFrame(data=before_samples_y,
+                                   columns=pd_means_humans_before.index.values)
+    pd_before_y = pd_before_y.stack(level=0).reset_index()
+    pd_before_y.rename({"level_0":"idx",0:"Y"},axis=1,inplace=True)
+    pd_before = pd_before_x.merge(pd_before_y,on=["idx","level_1"])
+    pd_before["xy"] = pd_before.apply(lambda row: (row["X"],row["Y"]),axis=1)
+
+    after_samples_x = np.random.multivariate_normal(after_mean_x,
+                                                     after_cov_x,size=bs_size)
+    pd_after_x = pd.DataFrame(data=after_samples_x,
+                                   columns=pd_means_humans_after.index.values)
+    pd_after_x = pd_after_x.stack(level=0).reset_index()
+    pd_after_x.rename({"level_0":"idx",0:"X"},axis=1,inplace=True)
+    after_samples_y = np.random.multivariate_normal(after_mean_y,
+                                                     after_cov_y,size=bs_size)
+    pd_after_y = pd.DataFrame(data=after_samples_y,
+                                   columns=pd_means_humans_after.index.values)
+    pd_after_y = pd_after_y.stack(level=0).reset_index()
+    pd_after_y.rename({"level_0":"idx",0:"Y"},axis=1,inplace=True)
+    pd_after = pd_after_x.merge(pd_after_y,on=["idx","level_1"])
+    pd_after["xy"] = pd_after.apply(lambda row: (row["X"],row["Y"]),axis=1)
+    return pd_before,pd_after
+
+def fit_gauss_to_kulkarni(bs_size=10000,X_subset=[256,128,64,32,16,8],return_dist=False):
+   pd_kulkarni = (format_kulkarni_human_data().groupby(["Smooth Factor"])
+                                              .agg([np.mean,'std'])
+                                              .reset_index())
+   #Chnage from coordinates (0,355) to (-175,180)
+   pd_kulkarni.columns = ['_'.join(col) for col in pd_kulkarni.columns]
+   pd_kulkarni.rename({'X_mean':'X','Y_mean':'Y','Y_std':'SD'},axis=1,inplace=True)
+   pd_kulkarni["X"] = [8,16,32,64,128,256,512,1024]
+   pd_kulkarni = pd_kulkarni.query("X in @X_subset")
+   pd_kulkarni["var"] = pd_kulkarni["SD"].pow(2)
+   mean = pd_kulkarni["Y"]
+   cov = np.diag(pd_kulkarni["SD"])
+   samples = np.random.multivariate_normal(mean,cov,size=bs_size)
+   samples_pd_wide = pd.DataFrame(data=samples, columns=pd_kulkarni["X"])
+   samples_pd = samples_pd_wide.stack(level=0).reset_index()
+   samples_pd.rename({"level_0":"idx",0:"Y"},axis=1,inplace=True)
+   pd_kulkarni_human_norm = pd_normalize_column(pd_kulkarni)
+   #flip network data and normalize
+   rmse_list = []
+   with ChainedAssignment():
+       for idx,sample_mean in samples_pd.groupby(["idx"]):
+           pd_kulkarni_samplew_norm = pd_normalize_column(sample_mean)
+           (kendall_tau,spearman_r,rmse) = get_stats(pd_kulkarni_human_norm,
+                                                     pd_kulkarni_samplew_norm)
+           rmse_list.append(rmse)
+           if idx%500 ==0:print(idx)
+   if return_dist:
+       return rmse_list
+   rmse_list.sort()
+   bootstrapped_mean = sum(rmse_list)/len(rmse_list)
+   ci_5,ci_95 = rmse_list[int(bs_size*.05)],rmse_list[int(bs_size*.95)]
+   return ci_5,bootstrapped_mean,ci_95
+
+
+def fit_gauss_to_litovsky(bs_size=10000,return_dist=False):
+   pd_litovsky_human = get_litovsky_human_data(add_errorbars=True)
+   pd_litovsky_adult_mean = pd_litovsky_human.loc[:,(("Lead Click Adult","Lag Click Adult"),"Y")].values.ravel(order='F')
+   pd_litovsky_X_vals = pd_litovsky_human.loc[:,(("Lead Click Adult","Lag Click Adult"),"X")].values.ravel(order="F")
+   pd_litovsky_adult_sd = pd_litovsky_human.loc[:,(("Lead Click Adult Top","Lag Click Adult Top"),"Y")].values.ravel(order='F') - pd_litovsky_adult_mean
+   pd_litovsky_adult_var = (pd_litovsky_adult_sd**2)
+   cov = np.diag(pd_litovsky_adult_var)
+   samples = np.random.multivariate_normal(pd_litovsky_adult_mean,cov,size=bs_size)
+   samples_pd_wide = pd.DataFrame(data=samples, columns=pd_litovsky_X_vals)
+   samples_pd = samples_pd_wide.stack(level=0).reset_index()
+   samples_pd.rename({"level_0":"idx",0:"Y"},axis=1,inplace=True)
+   pd_litovsky_human_norm = pd_normalize_column(pd_litovsky_adult_mean)
+   rmse_list = []
+   with ChainedAssignment():
+       for idx,sample_mean in samples_pd.groupby(["idx"]):
+           pd_litovsky_samplew_norm = pd_normalize_column(sample_mean)
+           (kendall_tau,spearman_r,rmse) = get_stats(pd_litovsky_human_norm,
+                                                     pd_litovsky_samplew_norm)
+           rmse_list.append(rmse)
+           if idx%500 ==0:print(idx)
+   if return_dist:
+       return rmse_list
+   rmse_list.sort()
+   bootstrapped_mean = sum(rmse_list)/len(rmse_list)
+   ci_5,ci_95 = rmse_list[int(bs_size*.05)],rmse_list[int(bs_size*.95)]
+   return ci_5,bootstrapped_mean,ci_95
+
+def get_gauss_rmse_floor_estimate():
+    bs_size=10000
+    rmse_wood = fit_gauss_to_wood(return_dist=True)
+    rmse_yost = fit_gauss_to_broadband_yost(return_dist=True)
+    rmse_van_opstal = fit_gauss_to_van_opstal(return_dist=True)
+    rmse_kulkarni = fit_gauss_to_kulkarni(return_dist=True)
+    rmse_litovsky = fit_gauss_to_litovsky(return_dist=True)
+    rmse_total = [sum(res)/5 for res in zip(rmse_wood,rmse_yost,rmse_van_opstal,
+                                          rmse_kulkarni,rmse_litovsky)]
+
+    rmse_total.sort()
+    return rmse_total
+
+def get_mean_error_graph_subset(regex_folder_list,iter_nums=100000,condtion_names=None,model_num=10,
+                                experiment_subset=None):
+    iter_nums = [iter_nums]*len(regex_folder) if isinstance(iter_nums,int) else iter_nums
+    bootstrap_data_list = []
+    models_dict_list = []
+    condtion_names = condtion_names if condtion_names is not None else regex_folder_list
+    for iter_num,regex_folder in zip(iter_nums,regex_folder_list):
+        if iter_num == 100000:
+            bootstrap_dict = bootstrap_plots(regex_folder,random_seed=0,num_iterations=10000)
+            models_dict = bootstrap_plots(regex_folder,random_seed=0,num_iterations=None,
+                                          model_num=model_num)
+        else:
+            bootstrap_dict = bootstrap_plots(regex_folder,random_seed=0,iter_num=iter_num,num_iterations=10000)
+            models_dict = bootstrap_plots(regex_folder,random_seed=0,iter_num=iter_num,num_iterations=None,
+                                      model_num=model_num)
+        if experiment_subset:
+            filtered_bootstrap_dict = {key: bootstrap_dict[key] for key in experiment_subset}
+            filtered_models_dict = {key: models_dict[key] for key in experiment_subset}
+        else:
+            filtered_bootstrap_dict = bootstrap_dict
+            filtered_models_dict = models_dict
+        bootstrap_data_list.append(filtered_bootstrap_dict)
+        models_dict_list.append(filtered_models_dict)
+    np_bootstraps = get_bootstapped_rank(*bootstrap_data_list,
+                                              graphing_mode=True)
+    np_mean_bootstraps = np_bootstraps.mean(axis=0)
+    pd_raw = pd.DataFrame(data=np_mean_bootstraps,columns=condtion_names)
+    human_rmse = get_gauss_rmse_floor_estimate()
+    pd_rmse_human = pd.DataFrame(data=np.array(human_rmse),columns=["Network-Human Error"])
+    pd_rmse_human["Training Condition"] = "Between Human"
+
+    plt.clf()
+    pd_raw_error = pd_raw.melt(value_vars=pd_raw.columns,
+                               var_name='Training Condition',
+                               value_name="Network-Human Error")
+    pd_raw_error = pd.concat([pd_raw_error,pd_rmse_human])
+    new_palette = ["#97B4DE","#785EF0","#DC267F","#FE6100"]
+    sns.barplot(x="Training Condition",y="Network-Human Error",ci='sd',
+                palette=sns.color_palette(new_palette),data=pd_raw_error)
+    name = plots_folder+"/mean_error_by_training_condition_for_gaussian_subset.png"
+    plt.ylim(0,0.29)
+    plt.yticks([0.0,0.05,0.1,0.15,0.2,0.25])
+    plt.tight_layout()
+    plt.savefig(name,dpi=400)
 
 def get_bootstapped_mean(*training_conditions_dicts):
     for training_condition in training_conditions_dicts:
@@ -2694,6 +2418,373 @@ def get_middlebrooks_slope_dist_bootstrapped(network_regex=None,
         slopes_list.append((slope_1_ITD,slope_2_ITD,slope_1_ILD,slope_2_ILD))
     return slopes_list
 
+def format_dataframe_num_sources(pd_num_sources):
+    pd_num_sources['reference_elev'] = None
+    pd_num_sources['reference_azim'] = None
+    pd_num_sources['target_elev'] = None
+    pd_num_sources['target_azim'] = None
+    pd_num_sources['elev'] = pd_num_sources['elev'].apply(lambda x: [val//2 for val in x])
+    pd_num_sources['reference_elev'] = pd_num_sources['elev'].apply(lambda x: x[0])
+    pd_num_sources['reference_azim'] = pd_num_sources['azim'].apply(lambda x: x[0])
+    pd_num_sources['target_elev'] = pd_num_sources['elev'].apply(lambda x: x[1])
+    pd_num_sources['target_azim'] = pd_num_sources['azim'].apply(lambda x: x[1])
+    pd_num_sources['predicted_num_sources'] = pd_num_sources['predicted'].apply(lambda x: np.argmax(x)+1)
+    pd_num_sources['num_sources'] = pd_num_sources['azim'].apply(lambda x: sum(x>=0))
+    return pd_num_sources
+
+def format_dataframe_zhong_yost(pd_zhong_yost):
+    pd_zhong_yost['predicted_np'] = pd_zhong_yost['predicted'].apply(lambda x: np.array(x))
+    pd_zhong_yost['num_sources'] = pd_zhong_yost['azim'].apply(lambda x: sum(x>=0))
+    pd_zhong_yost['pred_locs_top_8'] = (pd_zhong_yost['predicted']
+                                        .apply(lambda x: np.array(x[:72]).argsort()[-1:-9:-1]))
+                                                
+    pd_zhong_yost['top_locs_prob'] =\
+            pd_zhong_yost.apply(lambda x: [x['predicted'][idx] for idx in x['pred_locs_top_8']],axis=1)
+    bins = sorted([x for x in set(itertools.chain.from_iterable(pd_zhong_yost['azim'])) if x >= 0])
+    bin_mask = np.array(shift([x for x in bins for _ in range(72//len(bins))],2))
+
+    pd_zhong_yost['grouped_prob'] = (pd_zhong_yost['predicted_np']
+                                     .apply(lambda x : [sum(x[:72][bin_mask == i]) for i in bins]))
+    pd_zhong_yost['digitized_top_8_pred'] = (pd_zhong_yost['pred_locs_top_8']
+                                          .apply(lambda x: [bins[np.abs(bins-pos).argmin()] for pos in x]))
+    #set cutoff by lower cutoff until 95 CI for predicted number of sources for one source contains one.
+    #Mean arcross archs by stim.
+    pd_zhong_yost['pred_sources'] =\
+        pd_zhong_yost.apply(lambda x : set([idx for idx,prob in 
+                                            zip(x['digitized_top_8_pred'],x['top_locs_prob']) 
+                                            if prob/max(max(x['top_locs_prob']),1e-10) > 0.09]), axis=1)
+    fold_dict = {0:0,6:6,12:12,18:18,24:12,30:6,36:0,42:66,48:60,54:54,60:60,66:66}
+    pd_zhong_yost['pred_sources_folded'] = (pd_zhong_yost['pred_sources']
+                                            .apply(lambda x: set([fold_dict[pos] for pos in x])))
+    pd_zhong_yost['pred_num_sources_folded'] = pd_zhong_yost['pred_sources_folded'].apply(lambda x : len(x))
+    pd_zhong_yost['pred_num_sources'] = pd_zhong_yost['pred_sources'].apply(lambda x : len(x))
+    pd_zhong_yost['num_correct_preds'] = (pd_zhong_yost
+                                          .apply(lambda x: len([pos for pos in x['pred_sources']
+                                                                if pos in x['azim']]),axis=1))
+    pd_zhong_yost['percent_correct_pred'] = (pd_zhong_yost
+                                             .apply(lambda x: x['num_correct_preds']/x['num_sources']
+                                                    ,axis=1))
+    pd_zhong_yost['pred_azims'] =\
+            pd_zhong_yost.apply(lambda x: x['digitized_top_8_pred'][:x['pred_num_sources']],axis=1)
+
+def make_zhong_yost_plots(pd_zhong_yost,prefix=""):
+    plt.clf()
+    pd_zhong_yost_arch_mean = pd_zhong_yost.groupby(["arch_index","num_sources"]).mean().reset_index()
+    pd_zhong_yost_stats = pd_zhong_yost_arch_mean.groupby(["num_sources"]).agg([np.mean,'std','sem']).reset_index()
+    x_axis = [x for x in range(1,9)]
+    y_num_sources = pd_zhong_yost_stats['pred_num_sources']['mean'].tolist()
+    y_std_num_sources = pd_zhong_yost_stats['pred_num_sources']['std'].tolist()
+    y_prop_corr = pd_zhong_yost_stats['percent_correct_pred']['mean'].tolist()
+    y_std_prop_corr = pd_zhong_yost_stats['percent_correct_pred']['std'].tolist()
+    sns.lineplot(data=pd_zhong_yost_arch_mean,x="num_sources",y="pred_num_sources",ci=None,color='k')
+    plt.errorbar(x=x_axis,y=y_num_sources,yerr=y_std_num_sources,lw=0,elinewidth=1,capsize=0,ecolor='k')
+    plt.plot([0, 8], [0, 8],ls="--",color='k',lw=0.5)
+    plt.xticks([0,1,2,3,4,5,6,7,8],fontsize=10)
+    plt.yticks([0,1,2,3,4,5,6,7,8],fontsize=10)
+    for i in range(0,10):
+        plt.axhline(i,color='k',alpha=0.5)
+    plt.ylim(0,8)
+    plt.xlim(0,8.5)
+    plt.ylabel("Reported Number of Sources",fontsize=10)
+    plt.xlabel("Actual Number of Sources",fontsize=10)
+    pd_zhong_yost_stats.to_csv(plots_folder+"/"+prefix+"num_sources_vs_pred_num_sources_zhong_yost.csv")
+    plt.savefig(plots_folder+"/"+prefix+"num_sources_vs_pred_num_sources_zhong_yost.svg")
+    plt.clf()
+    sns.lineplot(data=pd_zhong_yost_arch_mean,x="num_sources",y="percent_correct_pred",ci=None,color='k')
+    plt.errorbar(x=x_axis,y=y_prop_corr,yerr=y_std_prop_corr,lw=0,elinewidth=1,capsize=0,ecolor='k')
+    plt.xticks([0,1,2,3,4,5,6,7,8],fontsize=10)
+    plt.yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0],fontsize=10)
+    for i in [x/10.0 for x in range(0,10)]:
+        plt.axhline(i,color='k',alpha=0.5)
+    plt.ylim(0,1.0)
+    plt.xlim(0,8.5)
+    plt.ylabel("Proportion of Correct Responses",fontsize=10)
+    plt.xlabel("Actual Number of Sources",fontsize=10)
+    pd_zhong_yost_arch_mean.to_csv(plots_folder+"/"+prefix+"num_sources_vs_percent_correct_pred_zhong_yost.csv")
+    plt.savefig(plots_folder+"/"+prefix+"num_sources_vs_percent_correct_pred_zhong_yost.svg")
+
+def get_zhong_yost_human_data():
+    pd_zhong_yost_num_sources = pd.read_csv("/om/user/francl/zhong_yost_num_sources.csv",header=[0,1])   
+    pd_zhong_yost_pred_locs = pd.read_csv("/om/user/francl/zhong_yost_correct_pred_locations.csv",header=[0,1])   
+    pd_x_value = [1,2,3,4,5,6,7,8]
+    pd_zhong_yost_num_sources.loc[:,("Num Sources","X")] = pd_x_value
+    pd_zhong_yost_num_sources.loc[:,("Top Error Bar","X")] = pd_x_value
+    pd_zhong_yost_num_sources.loc[:,("Bottom Error Bar","X")] = pd_x_value
+    pd_zhong_yost_pred_locs.loc[:,("Correct Responses","X")] = pd_x_value
+    pd_zhong_yost_pred_locs.loc[:,("Top Error Bar","X")] = pd_x_value
+    pd_zhong_yost_pred_locs.loc[:,("Bottom Error Bar","X")] = pd_x_value
+    return pd_zhong_yost_num_sources,pd_zhong_yost_pred_locs
+
+def make_zhong_yost_human_plots():
+    pd_num_sources,pd_pred_locs = get_zhong_yost_human_data()
+    plt.clf()
+    pd_num_sources_line = pd_num_sources.loc[:,"Num Sources"]
+    pd_num_sources_top = pd_num_sources.loc[:,"Top Error Bar"]
+    pd_num_sources_bottom = pd_num_sources.loc[:,"Bottom Error Bar"]
+    pd_pred_locs_line = pd_pred_locs.loc[:,"Correct Responses"]
+    pd_pred_locs_top = pd_pred_locs.loc[:,"Top Error Bar"]
+    pd_pred_locs_bottom = pd_pred_locs.loc[:,"Bottom Error Bar"]
+    errorbar_vector_num_sources =np.array([abs(pd_num_sources_top["Y"]-pd_num_sources_line["Y"]),
+                                  abs(pd_num_sources_bottom["Y"]-pd_num_sources_line["Y"])])
+    errorbar_vector_pred_locs =np.array([abs(pd_pred_locs_top["Y"]-pd_pred_locs_line["Y"]),
+                                  abs(pd_pred_locs_bottom["Y"]-pd_pred_locs_line["Y"])])
+    sns.lineplot(data=pd_num_sources_line,x="X",y="Y",ci=None,color='k')
+    plt.errorbar(x=pd_num_sources_line["X"],y=pd_num_sources_line["Y"],yerr=errorbar_vector_num_sources,
+                 lw=0,elinewidth=1,capsize=0,ecolor='k')
+    plt.plot([0, 8], [0, 8],ls="--",color='k',lw=0.5)
+    plt.xticks([0,1,2,3,4,5,6,7,8],fontsize=10)
+    plt.yticks([0,1,2,3,4,5,6,7,8],fontsize=10)
+    for i in range(0,10):
+        plt.axhline(i,color='k',alpha=0.5)
+    plt.ylim(0,8)
+    plt.xlim(0,8.5)
+    plt.ylabel("Reported Number of Sources",fontsize=10)
+    plt.xlabel("Actual Number of Sources",fontsize=10)
+    plt.savefig(plots_folder+"/zhong_yost_num_sources_human_results.svg")
+    plt.clf()
+    sns.lineplot(data=pd_pred_locs_line,x="X",y="Y",ci=None,color='k')
+    plt.errorbar(x=pd_pred_locs_line["X"],y=pd_pred_locs_line["Y"],yerr=errorbar_vector_pred_locs,
+                 lw=0,elinewidth=1,capsize=0,ecolor='k')
+    plt.xticks([0,1,2,3,4,5,6,7,8],fontsize=10)
+    plt.yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0],fontsize=10)
+    for i in [x/10.0 for x in range(0,10)]:
+        plt.axhline(i,color='k',alpha=0.5)
+    plt.ylim(0,1.0)
+    plt.xlim(0,8.5)
+    plt.ylabel("Proportion of Correct Responses",fontsize=10)
+    plt.xlabel("Actual Number of Sources",fontsize=10)
+    plt.savefig(plots_folder+"/zhong_yost_correct_pred_locs_human_results.svg")
+
+
+def get_validation_set_accuracy_num_sources(pd_num_sources):
+    corr = (pd_num_sources['predicted_num_sources'] ==
+            pd_num_sources['num_sources']).sum()
+    total =  pd_num_sources.shape[0] 
+    acc = corr / total
+    return acc
+
+def get_accuracies_num_sources(regex):
+    fnames = sorted(glob(regex))
+    for path in fnames:
+        name = path.split("init_0/")[1]
+        print(name)
+        pd_num_sources = make_dataframe_multi_source(path)
+        pd_num_sources_formatted = format_dataframe_num_sources(pd_num_sources)
+        counts = pd_num_sources_formatted['predicted_num_sources'].value_counts()
+        acc = get_validation_set_accuracy_num_sources(pd_num_sources_formatted)
+        print("Accuracy:",acc)
+        print("Counts:",counts)
+
+def format_hebrank_wright_dataframe(pd_hebrank_wright):
+    pd_hebrank_wright = pd_hebrank_wright.convert_objects(convert_numeric=True)
+    if pd_hebrank_wright['azim'].dtype != 'int64':
+        pd_hebrank_wright['azim'] = pd_hebrank_wright['azim'].apply(convert_from_numpy)
+        pd_hebrank_wright['elev'] = pd_hebrank_wright['elev'].apply(convert_from_numpy)
+    #Get azim and elevation based on predicted index
+    pd_hebrank_wright['predicted_elev'] = None
+    pd_hebrank_wright['predicted_azim'] = None
+    pd_hebrank_wright['predicted_elev'] = pd_hebrank_wright['predicted'].apply(lambda x: 10*(x//72))
+    pd_hebrank_wright['predicted_azim'] = pd_hebrank_wright['predicted'].apply(lambda x: x%72)
+    pd_hebrank_wright['azim'] = pd_hebrank_wright['azim'].apply(lambda x : 5*x)
+    pd_hebrank_wright['elev'] = pd_hebrank_wright['elev'].apply(lambda x : 10*(x/2))
+    pd_hebrank_wright['hebrank_wright_pos'] = (pd_hebrank_wright
+                                               .apply(lambda x: x['elev'] if x['azim'] == 0
+                                                      else 180 - x['elev'],axis=1))
+    pd_hebrank_wright['hebrank_wright_pred_pos'] = (pd_hebrank_wright
+                                               .apply(lambda x: x['predicted_elev'] if
+                                                      (x['predicted_azim'] >= 350 or
+                                                       x['predicted_azim'] <=10)
+                                                      else 180 - x['predicted_elev'],axis=1))
+    #claculate error
+    pd_hebrank_wright['elev_error'] = (pd_hebrank_wright['predicted_elev'] -
+                                                    pd_hebrank_wright['elev']).abs()
+    pd_hebrank_wright['hebrank_wright_error'] = (pd_hebrank_wright['hebrank_wright_pred_pos'] -
+                                                    pd_hebrank_wright['hebrank_wright_pos']).abs()
+    pd_hebrank_wright['correct_within_15'] = pd_hebrank_wright['hebrank_wright_error'].apply(lambda x: x < 15)
+    pd_hebrank_wright['correct_within_45'] = pd_hebrank_wright['hebrank_wright_error'].apply(lambda x: x < 45)
+    return pd_hebrank_wright
+
+def format_hebrank_wright_dataframe_azim_limited(pd_hebrank_wright,elev_list=[0,30,60]):
+    def get_filtering_condition(row):
+        if (row['low_cutoff'] == 20):
+            if (row['high_cutoff'] != 20000):
+                return 'low_pass'
+            else:
+                return 'full_spec'
+        return 'high_pass'
+    def set_cutoff(row):
+        if row['Filtering Condition'] == 'low_pass':
+            return row['high_cutoff']
+        return row['low_cutoff']
+    pd_hebrank_wright = pd_hebrank_wright.convert_objects(convert_numeric=True)
+    if pd_hebrank_wright['azim'].dtype != 'int64':
+        pd_hebrank_wright['azim'] = pd_hebrank_wright['azim'].apply(convert_from_numpy)
+        pd_hebrank_wright['elev'] = pd_hebrank_wright['elev'].apply(convert_from_numpy)
+    elev_list = np.array(elev_list)
+    #Get azim and elevation based on predicted index
+    pd_hebrank_wright['predicted_elev'] = None
+    pd_hebrank_wright['predicted_azim'] = None
+    pd_hebrank_wright['predicted_elev'] = pd_hebrank_wright['predicted'].apply(lambda x: 10*(x//72))
+    pd_hebrank_wright['predicted_azim'] = pd_hebrank_wright['predicted'].apply(lambda x: x%72)
+    pd_hebrank_wright['azim'] = pd_hebrank_wright['azim'].apply(lambda x : 5*x)
+    pd_hebrank_wright['elev'] = pd_hebrank_wright['elev'].apply(lambda x : 10*(x/2))
+    pd_hebrank_wright = pd_hebrank_wright.query("elev in @elev_list")
+    pd_hebrank_wright['hebrank_wright_pos'] = (pd_hebrank_wright
+                                               .apply(lambda x: x['elev'] if x['azim'] == 0
+                                                      else 180 - x['elev'],axis=1))
+    pd_hebrank_wright['hebrank_wright_pred_elev'] = (pd_hebrank_wright['predicted_elev']
+                                                     .apply(lambda x: elev_list[np.abs(elev_list-x).argmin()]))
+    pd_hebrank_wright['hebrank_wright_pred_pos'] = (pd_hebrank_wright
+                                               .apply(lambda x: x['hebrank_wright_pred_elev'] if
+                                                      (x['predicted_azim'] >= 350 or
+                                                       x['predicted_azim'] <=10)
+                                                      else 180 - x['hebrank_wright_pred_elev'],axis=1))
+    #claculate error
+    pd_hebrank_wright['elev_error'] = (pd_hebrank_wright['predicted_elev'] -
+                                                    pd_hebrank_wright['elev']).abs()
+    pd_hebrank_wright['hebrank_wright_error'] = (pd_hebrank_wright['hebrank_wright_pred_pos'] -
+                                                    pd_hebrank_wright['hebrank_wright_pos']).abs()
+    pd_hebrank_wright['correct_within_15'] = pd_hebrank_wright['hebrank_wright_error'].apply(lambda x: x < 15)
+    pd_hebrank_wright['correct_within_45'] = pd_hebrank_wright['hebrank_wright_error'].apply(lambda x: x < 45)
+    #Adding columns for human/model comparison
+    pd_hebrank_wright["Filtering Condition"] = pd_hebrank_wright.apply(lambda x: get_filtering_condition(x),axis=1)
+    pd_hebrank_wright['Frequency (Hz)'] = pd_hebrank_wright.apply(lambda x: set_cutoff(x),axis=1)
+    return pd_hebrank_wright
+
+def make_hebrank_wright_plots(pd_hebrank_wright_formatted,y_axis="correct_within_15"):
+    plt.clf()
+    pd_hebrank_wright_arch_mean = (pd_hebrank_wright_formatted
+                                   .groupby(['low_cutoff','high_cutoff','arch_index'])
+                                   .mean().reset_index())
+    pd_hebrank_wright_arch_mean_low = pd_hebrank_wright_arch_mean.query("low_cutoff == 20 & high_cutoff != 20000")
+    pd_hebrank_wright_arch_mean_high = pd_hebrank_wright_arch_mean.query("high_cutoff == 20000 & low_cutoff != 20")
+    g = sns.lineplot(data=pd_hebrank_wright_arch_mean_low,x="high_cutoff",y=y_axis,ci=68,
+                     err_style='bars',lw=0.75)
+    sns.lineplot(data=pd_hebrank_wright_arch_mean_high,x="low_cutoff",y=y_axis,ci=68,
+                    err_style='bars',lw=0.75)
+    g.set(xticklabels=[])
+    g.set_xscale('log')
+    g.set_yticks([0,.2,.4,.6,.8,1.0])
+    g.set_yticklabels([0,.2,.4,.6,.8,1.0],fontsize=10)
+    g.set_xticks([4000,6000,8000,10000,12000,15000,18000])
+    g.set_xticklabels([4000,6000,8000,10000,12000,15000,18000],fontsize=10,rotation=45)
+    g.set_ylabel("Proportion of Correct Responses",fontsize=10)
+    g.set_xlabel("Cutoff Frequency (Hz)",fontsize=10)
+    #plt.legend(["Low Pass","High Pass"],title="Filtering Condition",fontsize=15)
+    pd_hebrank_wright_arch_mean.to_csv(plots_folder + "/hebrank_wright.csv")
+    plt.savefig(plots_folder+"/hebrank_wright_{}.svg".format(y_axis))
+
+def get_hebrank_wright_human_data():
+    pd_hebrank_wright = pd.read_csv("/om/user/francl/hebrank_wright_human_data.csv",header=[0,1])   
+    pd_x_low = [3900,6000,8000,10300,12000,14500,16000]
+    pd_x_high = [3800,5800,7500,10000,13200,15300,np.nan]
+    pd_hebrank_wright.loc[:,("high_pass","X")] = pd_x_high
+    pd_hebrank_wright.loc[:,("high_pass","Y")] = (pd_hebrank_wright
+                                                  .loc[:,("high_pass","Y")]
+                                                  .apply(lambda x: x/100))
+    pd_hebrank_wright.loc[:,("low_pass","X")] = pd_x_low
+    pd_hebrank_wright.loc[:,("low_pass","Y")] = (pd_hebrank_wright
+                                                  .loc[:,("low_pass","Y")]
+                                                  .apply(lambda x: x/100))
+    pd_hebrank_wright = pd_hebrank_wright.stack(level=0).reset_index()
+    pd_hebrank_wright.rename({"level_1":"Filtering Condition",
+                                   "X":"Frequency (Hz)",
+                                   "Y":"Proportion of Correct Responses"},axis=1,inplace=True)
+    return pd_hebrank_wright
+
+def make_hebrank_wright_human_plot():
+    pd_hebrank_wright_human = get_hebrank_wright_human_data()
+    plt.clf()
+    hue_order = ["low_pass","high_pass"]
+    g = sns.lineplot(data=pd_hebrank_wright_human,x="Frequency (Hz)",
+                 y="Proportion of Correct Responses",hue="Filtering Condition",
+                 style="Filtering Condition",hue_order=hue_order,err_style='bars',
+                 markers=["o","o"],dashes=False,ms=2.0,mew=0.05,lw=0.75)
+    g.set(xticklabels=[])
+    g.set_xscale('log')
+    g.set_yticks([0,.2,.4,.6,.8,1.0])
+    g.set_yticklabels([0,.2,.4,.6,.8,1.0],fontsize=10)
+    g.set_xticks([4000,6000,8000,10000,12000,15000,18000])
+    g.set_xticklabels([4000,6000,8000,10000,12000,15000,18000],fontsize=10,rotation=45)
+    g.set_ylabel("Proportion of Correct Responses",fontsize=10)
+    g.set_xlabel("Cutoff Frequency (Hz)",fontsize=10)
+    #plt.xscale('log')
+    #plt.yticks([0,.2,.4,.6,.8,1.0],fontsize=10)
+    #plt.xticks([4000,6000,8000,10000,12000,15000,18000],fontsize=10,rotation=45)
+    #plt.ylabel("Proportion of Correct Responses",fontsize=10)
+    #plt.xlabel("Cutoff Frequency (Hz)",fontsize=10)
+    plt.legend(["Low Pass","High Pass"],title="Filtering Condition",fontsize=15)
+    plt.savefig(plots_folder+"/hebrank_wright_human_data.svg")
+
+def get_hebrank_wright_correlations(network_regex=None,bootstrap_mode=False):
+    if network_regex is None:
+        network_regex = ("/om5/user/francl/grp-om2/gahlm/dataset_pipeline_test"
+                         "/arch_number_*_init_0/batch_conditional_noiseRecords"
+                         "_hebrank_wright_iter100000.npy")
+    pd_hebrank_wright = make_dataframe(network_regex,elevation_predictions=True)
+    pd_hebrank_wright_network_formatted = format_hebrank_wright_dataframe_azim_limited(pd_hebrank_wright)
+    pd_hebrank_wright_network_formatted.rename(columns={"correct_within_15":"Proportion of Correct Responses"},
+                                               inplace=True)
+    pd_hebrank_wright_network_formatted_subset = (
+        pd_hebrank_wright_network_formatted[
+            pd_hebrank_wright_network_formatted["Filtering Condition"] != 'full_spec'
+        ]
+        .loc[:,["Filtering Condition","Frequency (Hz)","Proportion of Correct Responses"]]
+        .sort_values(by=["Filtering Condition","Frequency (Hz)"])
+    )
+    pd_hebrank_wright_network_mean = (pd_hebrank_wright_network_formatted_subset
+                                      .groupby(["Filtering Condition",
+                                                "Frequency (Hz)"])
+                                      .mean().reset_index())
+    pd_hebrank_wright_human = (get_hebrank_wright_human_data()
+                               .sort_values(by=["Filtering Condition","Frequency (Hz)"]))
+    if bootstrap_mode:
+        return (pd_hebrank_wright_human,pd_hebrank_wright_network_mean)
+    pd_human_model= pd_hebrank_wright_network_mean
+    pd_human_model["Proportion of Correct Human Responses"] = (
+        pd_hebrank_wright_human["Proportion of Correct Responses"].values
+    )
+    pd_human_model_norm = (
+        pd_normalize_column(pd_human_model,
+                            columns=["Proportion of Correct Responses",
+                                    "Proportion of Correct Human Responses"],
+                            norm_across_cols=True,
+                            columns_out=["model_norm","human_norm"])
+    )
+    (kendall_tau,spearman_r,rmse) = get_stats(pd_human_model_norm["human_norm"],
+                                              pd_human_model_norm["model_norm"])
+    return (kendall_tau,spearman_r,rmse)
+
+
+def get_hebrank_wright_correlations_bootstrapped(network_regex=None,
+                                           model_choices=None):
+    assert model_choices is not None
+    fnames = sorted(glob(network_regex))
+    model_data = []
+    for model in fnames:
+        pd_human,pd_model = get_hebrank_wright_correlations(network_regex=model,
+                                                      bootstrap_mode=True)
+        model_data.append(pd_model)
+    rmse_list = []
+    for idx,model_idx in enumerate(model_choices):
+        pd_model_sample = pd.concat([model_data[i] for i in model_idx])
+        pd_model_mean = pd_model_sample.groupby(pd_model_sample.index).mean()
+        pd_human_model= pd_model_mean
+        pd_human_model["Proportion of Correct Human Responses"] = (
+            pd_human["Proportion of Correct Responses"].values
+        )
+        pd_human_model_norm = (
+            pd_normalize_column(pd_human_model,
+                                columns=["Proportion of Correct Responses",
+                                        "Proportion of Correct Human Responses"],
+                                norm_across_cols=True,
+                                columns_out=["model_norm","human_norm"])
+        )
+        (kendall_tau,spearman_r,rmse) = get_stats(pd_human_model_norm["human_norm"],
+                                                  pd_human_model_norm["model_norm"])
+        rmse_list.append(rmse)
+    return rmse_list
+
 def get_validation_set_error_degrees(regex=None):
     if regex is None:
         regex = ("/om2/user/francl/grp-om2/gahlm/dataset_pipeline_test"
@@ -2706,6 +2797,20 @@ def get_validation_set_error_degrees(regex=None):
                        "Azim Error":pd_means['azim_error_abs'],
                        "Azim Error Folded":pd_means['azim_error_folded_abs']}
     return pd_testset_dict
+
+def format_multi_source_net(pd_multi_source):
+    pd_multi_source['elev'] = pd_multi_source['elev'].apply(lambda x: [val//2 for val in x])
+    #pd_multi_source['azim'] = pd_multi_source['azim'].apply(lambda x: [val*5 if val !=-1 else val for val in x])
+
+def filter_multi_source_predictions(pd_multi_source,min_sigmoid_value=0.0,
+                                    max_sigmoid_value=1.0):
+    min_sgmoid_bool = pd_multi_source['predicted'].apply(lambda x: max(x) > min_sigmoid_value)
+    max_sgmoid_bool = pd_multi_source['predicted'].apply(lambda x: max(x) < max_sigmoid_value)
+    select_cols = min_sgmoid_bool & max_sgmoid_bool
+    return pd_multi_source[select_cols]
+
+def mean_prediction_by_ref(pd_multi_source):
+    pd_pred_by_ref = pd_multi_source.groupby(['reference_azim','reference_elev'])['predicted']
 
 def get_yost_correlations(network_regex=None,bootstrap_mode=False):
     make_bandwidth_vs_error_humabn_plot()
@@ -2755,7 +2860,7 @@ def make_kulkarni_network_prediction_plots(regex=None):
     
     plt.tight_layout()
     plt.gca().get_legend().remove()
-    plt.savefig(plots_folder+"/azim_vs_predicted_by_smooth_factor.png",dpi=400)
+    plt.savefig(plots_folder+"/azim_vs_predicted_by_smooth_factor.svg")
     plt.clf()
     sns.lineplot(x="elev",y="predicted_elev",hue="smooth_factor",
                  data=pd_smoothed_arch_mean,legend=False,ci=68,
@@ -2765,7 +2870,8 @@ def make_kulkarni_network_prediction_plots(regex=None):
     plt.ylabel("Judged Elev",fontsize=10)
     plt.xlabel("Elev",fontsize=10)
     plt.tight_layout()
-    plt.savefig(plots_folder+"/elev_vs_predicted_by_smooth_factor.png",dpi=400)
+    pd_smoothed_arch_mean.to_csv(plots_folder+"/elev_vs_predicted_by_smooth_factor.csv")
+    plt.savefig(plots_folder+"/elev_vs_predicted_by_smooth_factor.svg")
 
 
 def get_kulkarni_correlations(network_regex=None,bootstrap_mode=False):
@@ -2837,7 +2943,7 @@ def make_litovsky_human_plot(bars_to_plot=["Lead Click Adult",
     plt.clf()
     sns.barplot(x="Lead Click Delay (ms)",y="Average RMS Error",
                 hue="Click Timing",hue_order=bars_to_plot,
-                palette=sns.xkcd_palette(["black","white"]),
+                palette=sns.xkcd_palette(["black","light grey"]),
                 data=pd_human_data_filtered,
                 errcolor=".2", edgecolor=".2")
     if add_errorbars:
@@ -2878,10 +2984,14 @@ def make_click_precedence_effect_plot(regex=None):
         plt.clf()
         plt.figure()
         sns.lineplot(x="delay",
-                     y="predicted_folded",data=pd_filtered_precedence_arch_mean,err_style='bars',ci=68)
+                     y="predicted_folded",data=pd_filtered_precedence_arch_mean,
+                     color='k',err_style='bars',ci=68,lw=1.0)
         format_precedence_effect_graph()
+        plt.yticks([-40,-20,0,20,40])
+        plt.xticks([0,10,20,30,40,50])
         plt.tight_layout()
-        plt.savefig(plots_folder+"/"+"precedence_effect_graph_lineplot_clicks.png")
+        pd_filtered_precedence_arch_mean.to_csv(plots_folder+"/"+"precedence_effect_graph_lineplot_clicks.csv")
+        plt.savefig(plots_folder+"/"+"precedence_effect_graph_lineplot_clicks.svg")
 
 def make_click_precedence_effect_across_conditions():
     plt.clf()
@@ -2922,6 +3032,8 @@ def make_click_precedence_effect_across_conditions():
                                                       pd_filtered_precedence_arch_mean_anechoic,
                                                       pd_filtered_precedence_arch_mean_no_background,
                                                       pd_filtered_precedence_arch_mean_unnatural_sounds])
+    #new_palette = ["#97B4DE","#785EF0","#DC267F","#FE6100","006838"]
+    pdb.set_trace()
     new_palette = ["#97B4DE","#785EF0","#DC267F","#FE6100"]
     sns.lineplot(x="delay",y="predicted_folded",hue="Training Condition",
                  data=pd_filtered_precedence_arch_mean_all,err_style='bars',ci=68,
@@ -2931,7 +3043,8 @@ def make_click_precedence_effect_across_conditions():
     plt.xticks([0,10,20,30,40,50])
     plt.yticks([-40,-20,0,20,40])
     plt.tight_layout()
-    plt.savefig(plots_folder+"/"+"precedence_effect_graph_lineplot_clicks_across_conditions.png",dpi=400)
+    pd_filtered_precedence_arch_mean_all.to_csv(plots_folder+"/"+"precedence_effect_graph_lineplot_clicks_across_conditions.csv")
+    plt.savefig(plots_folder+"/"+"precedence_effect_graph_lineplot_clicks_across_conditions.svg")
     ####
 
 
@@ -3087,8 +3200,9 @@ def litovsky_error_plot_multi_azim(regex=None):
     pd_litovsky_error = pd_litovsky_network_subset_rename.melt(id_vars=["delay"],value_vars=["Lead_error","Lag_error"],
                                                        var_name='Error Condition',value_name='RMSE')
     plt.clf()
+    pd_litovsky_error.to_csv(plots_folder + "/litovsky_barplots.csv")
     sns.barplot(x="delay",y="RMSE",hue="Error Condition",
-                palette=sns.xkcd_palette(["black","white"]),
+                palette=sns.xkcd_palette(["black","light grey"]),
                 errcolor=".2", edgecolor=".2",
                 data=pd_litovsky_error)
     plt.legend(loc=1)
@@ -3142,6 +3256,7 @@ def make_middlebrooks_network_plots(regex=None):
     pd_network_data_ILD = ILD_residuals_plot(pd_dataframe_ILD,extract_lines=True)
     pd_dataframe_ITD = ITD_residuals_process(pd_dataframe_formatted)
     pd_network_data_ITD = ITD_residuals_plot(pd_dataframe_ITD,extract_lines=True)
+    pd_dataframe_formatted.to_csv(plots_folder + '/middlebrooks_data.csv')
     return (pd_network_data_ILD,pd_network_data_ITD)
 
 
@@ -3168,14 +3283,15 @@ def get_van_opstal_human_plot(condition,hardcode_ref_grid=False):
         columns_to_plot = ['RO','RJ','MZ','PH']
     else:
         raise ValueError("Condtion: {} is not supported".format(condition))
-    pd_mean_values = make_van_opstal_paper_plot_bootstrapped(pd_collapsed,columns_to_plot,'ko') 
+    pd_mean_values = make_van_opstal_paper_plot_bootstrapped(pd_collapsed,columns_to_plot) 
     pd_ref_human = pd_collapsed['Reference Grid JO']
     if hardcode_ref_grid:
         grid = pd.Series([(x,y) for y in [20,6.667,-6.667,-20]
                           for x in [-20,-6.667,6.667,20]])
-        make_van_opstal_paper_plot(grid,'ko--',fill_markers=False)
+        make_van_opstal_paper_plot(grid,marker='o',color='k',dashes=[5,10],fill_markers=False)
     else:
-        make_van_opstal_paper_plot(pd_collapsed['Reference Grid JO'],'ko--',fill_markers=False)
+        make_van_opstal_paper_plot(pd_collapsed['Reference Grid JO'],marker='o',color='k',
+                                   dashes=[5,10],fill_markers=False)
     return pd_mean_values,pd_ref_human
 
 
@@ -3188,6 +3304,7 @@ def make_van_opstal_network_plots(regex=None):
     pd_cipic = make_dataframe(regex,fold_data=False,
                               elevation_predictions=True)
     pd_cipic_filtered = get_elevation_error_CIPIC(pd_cipic,subject=None)
+    plt.figure()
     pd_ref_grid = make_van_opstal_paper_plot_network_ref_grid()
     pd_after,pd_before = make_van_opstal_paper_plot_network_data(pd_cipic_filtered)
     return (pd_before,pd_after,pd_ref_grid)
@@ -3211,53 +3328,56 @@ def make_van_opstal_plot_individual_networks(regex=None):
     quartile_subjects_idx = [round(x*subjects_sorted.shape[0]) for x in [.05,.25,.75,.95]]
     quartile_sujects = subjects_sorted.iloc[quartile_subjects_idx]
     num_quartile_sub = quartile_sujects.shape[0]
-    pdb.set_trace()
     num_total_sub = pd_cipic_filtered['subject_num'].unique().shape[0]-1
     pd_dataframe_cipic_subject_quartile = pd_cipic_filtered.query("subject_num in @quartile_sujects")
     pd_dataframe_cipic_new_ears = pd_cipic_filtered.query("subject_num != 999")
     plt.clf()
+    plt.figure(figsize=(1.8,1.8))
     ax1=sns.lineplot(x='elev',y='predicted_elev',hue="Ears Used",data=pd_cipic_filtered,
-                     style="Ears Used",markers=["o","o"],lw=3.5,ms=8.5,err_style="bars",
-                     ci=68,dashes=False)
+                     style="Ears Used",markers=["o","o"],lw=1.25,ms=2.0,mew=0.15,err_style="bars",
+                     ci=None,dashes=False)
     handles,labels = plt.gca().get_legend_handles_labels()
     ax2 = sns.lineplot(x='elev',y='predicted_elev',hue="subject_num",
                   data=pd_dataframe_cipic_subject_quartile,
                  palette=sns.color_palette(n_colors=1)*num_quartile_sub,
                  style="subject_num",markers=["o"]*num_quartile_sub,dashes=False,
-                 err_style='bars',ci=68,lw=2,ms=5,alpha=0.8,ax=ax1)
+                 err_style='bars',ci=None,lw=0.5,ms=.75,mew=0.15,alpha=0.8,ax=ax1)
     ax3 = sns.lineplot(x='elev',y='predicted_elev',hue="subject_num",
                   data=pd_dataframe_cipic_new_ears,
                  palette=sns.color_palette(n_colors=1)*num_total_sub,
                  style="subject_num",markers=["o"]*num_total_sub,dashes=False,
-                 err_style='bars',ci=68,lw=1,ms=0,alpha=0.2,ax=ax2)
-    plt.legend(handles,labels)
+                 err_style='bars',ci=None,lw=0.35,ms=0.35,mew=0.05,alpha=0.2,ax=ax2)
+    #plt.legend(handles,labels)
+    plt.gca().legend().remove()
     plt.xlabel("Elevation (Degrees)")
     plt.ylabel("Predicted Elevation (Degrees)")
     plt.xticks([0,10,20,30,40,50],rotation=75)
     plt.yticks([0,10,20,30,40,50])
     plt.tight_layout()
-    plt.savefig(plots_folder+"/"+"elev_predicted_vs_label_all_subjects_vs_CIPIC_elev_collapsed.png")
+    plt.savefig(plots_folder+"/"+"elev_predicted_vs_label_all_subjects_vs_CIPIC_elev_collapsed.svg")
     plt.clf()
     ax1=sns.lineplot(x='azim',y='predicted_azim',hue="Ears Used",data=pd_cipic_filtered,
-                     style="Ears Used",markers=["o","o"],lw=3.5,ms=8.5,err_style="bars",
+                     style="Ears Used",markers=["o","o"],lw=1.25,ms=2.0,mew=0.15,err_style="bars",
                      ci=68,dashes=False)
     handles,labels = plt.gca().get_legend_handles_labels()
     ax2 = sns.lineplot(x='azim',y='predicted_azim',hue="subject_num",
                   data=pd_dataframe_cipic_subject_quartile,
                  palette=sns.color_palette(n_colors=1)*num_quartile_sub,
                  style="subject_num",markers=["o"]*num_quartile_sub,dashes=False,
-                 err_style='bars',ci=68,lw=2,ms=5,alpha=0.8,ax=ax1)
+                 err_style='bars',ci=68,lw=0.5,ms=1.0,mew=0.075,alpha=0.8,ax=ax1)
     ax3 = sns.lineplot(x='azim',y='predicted_azim',hue="subject_num",
                   data=pd_dataframe_cipic_new_ears,
                  palette=sns.color_palette(n_colors=1)*num_total_sub,
                  style="subject_num",markers=["o"]*num_total_sub,dashes=False,
-                 err_style='bars',ci=68,lw=1,ms=0,alpha=0.2,ax=ax2)
+                 err_style='bars',ci=68,lw=0.35,ms=0.35,mew=0.05,alpha=0.2,ax=ax2)
     plt.xlabel("Azimuth (Degrees)")
     plt.ylabel("Predicted Azimuth (Degrees)")
     plt.xticks([-75,-50,-25,0,25,50,75],rotation=75)
     plt.yticks([-75,-50,-25,0,25,50,75])
+    plt.gca().legend().remove()
     plt.tight_layout()
-    plt.savefig(plots_folder+"/"+"azim_predicted_vs_label_all_subjects_vs_CIPIC_elev_collapsed.png")
+    pd_cipic_filtered.to_csv(plots_folder+"/"+"predicted_vs_label_all_subjects_vs_CIPIC.csv")
+    plt.savefig(plots_folder+"/"+"azim_predicted_vs_label_all_subjects_vs_CIPIC_elev_collapsed.svg")
     
 
 
@@ -3338,6 +3458,7 @@ def pandas_bootstrap(pd_dataframe,columns,alpha=0.05,
                      stat_func=bs_stats.mean,iters=10000):
     pd_filtered = pd_dataframe.filter(items=columns)
     pd_ci = pd.DataFrame(columns=["x","y","xerr","yerr"])
+
     for index, row in pd_filtered.iterrows():
         x = np.array([x[0] for x in row])
         y = np.array([x[1] for x in row])
@@ -3354,27 +3475,30 @@ def pandas_bootstrap(pd_dataframe,columns,alpha=0.05,
         pd_ci.loc[index] = ci_tuple
     return pd_ci
 
-def make_van_opstal_paper_plot(pd_collapsed_col,fmt_str,fill_markers=True,color=None):
+def make_van_opstal_paper_plot(pd_collapsed_col,marker="",fill_markers=True,color=None,
+                              dashes=None):
     mfc = None if fill_markers else 'none'
+    ms=8.5
+    lw=3
     for counter in range(4):
         row = 4*counter
         col = counter
         for i in range(3):
             x_row,y_row = zip(pd_collapsed_col.iloc[row+i],pd_collapsed_col.iloc[row+i+1])
-            if color is not None:
-                plt.plot(x_row,y_row,fmt_str,mfc=mfc,color=color)
+            if dashes is not None:
+                plt.plot(x_row,y_row,marker=marker,mfc=mfc,color=color,dashes=dashes)
             else:
-                plt.plot(x_row,y_row,fmt_str,mfc=mfc)
+                plt.plot(x_row,y_row,marker=marker,mfc=mfc,color=color,lw=lw,ms=ms)
             x_col,y_col = zip(pd_collapsed_col.iloc[col+4*i],pd_collapsed_col.iloc[col+4*(i+1)])
-            if color is not None:
-                plt.plot(x_col,y_col,fmt_str,mfc=mfc,color=color)
+            if dashes is not None:
+                plt.plot(x_col,y_col,marker=marker,mfc=mfc,color=color,dashes=dashes)
             else:
-                plt.plot(x_col,y_col,fmt_str,mfc=mfc)
+                plt.plot(x_col,y_col,marker=marker,mfc=mfc,color=color,lw=lw,ms=ms)
 
 def make_van_opstal_paper_plot_network_data(pd_data_cipic,
                                             azim_list=[-20,-10,10,20],
                                             elev_list=list(range(0,40,10)),
-                                            fmt_str="ko",colors=None):
+                                            marker="o",colors=None):
     pd_CI_means_by_cond = []
     if colors is None: colors = {"New Sets":'#0173b2',"Normal Set":'#de8f05'}
     for condtion in sorted(pd_data_cipic["Ears Used"].unique()):
@@ -3393,21 +3517,23 @@ def make_van_opstal_paper_plot_network_data(pd_data_cipic,
                 xerr = np.array(x_min,x_max)
                 y_mean,y_min,y_max = pd_CI_normal_filtered["predicted_elev"].iloc[0]
                 yerr = np.array(y_min,y_max)
-                plt.errorbar(x_mean,y_mean,xerr,yerr,fmt_str,mfc=color,mec=color,ecolor='darkgray')
+                plt.errorbar(x_mean,y_mean,xerr,yerr,marker=marker,mfc=color,mec=color,ecolor='darkgray')
         
         query_string = ('azim in @azim_list & elev in @elev_list'.format(azim,elev))
         pd_CI_normal_filtered = pd_CI.query(query_string)
         pd_CI_sorted = pd_CI_normal_filtered.sort_values(['elev','azim'],ascending=[False,True]) 
         pd_CI_means = pd_CI_sorted[['predicted_azim','predicted_elev']].apply(lambda x:(x['predicted_azim'][0],x['predicted_elev'][0]),axis=1)
-        make_van_opstal_paper_plot(pd_CI_means,fmt_str.replace("o",""),color=color)
+        make_van_opstal_paper_plot(pd_CI_means,marker="",color=color)
         plt.ylim(-10,40)
         plt.xlim(-30,30)
-        plt.xticks(size = 20)
-        plt.yticks(size = 20)
+        plt.yticks([0,10,20,30],size = 20)
+        plt.xticks([-20,0,20],size = 20)
         plt.ylabel("Elevation (Degrees)",fontsize=20)
         plt.xlabel("Azimuth (Degrees)",fontsize=20)
         plt.tight_layout()
-        plt.savefig(plots_folder+"/van_opstal_network_sem_{}.png".format(condtion),dpi=400)
+        pd_CI_means.to_csv(plots_folder+"/van_opstal_network_sem_{}.csv".format(condtion))
+        plt.savefig(plots_folder+"/van_opstal_network_sem_{}.svg".format(condtion))
+
         pd_CI_means_by_cond.append(pd_CI_means)
     return pd_CI_means_by_cond
 
@@ -3422,17 +3548,18 @@ def make_van_opstal_paper_plot_network_ref_grid():
     d = {'x':x,'y':y}
     pd_refernce_grid = pd.DataFrame(columns=['x','y'],data=d)
     pd_refernce_grid['xy'] = list(zip(pd_refernce_grid.x, pd_refernce_grid.y))
-    make_van_opstal_paper_plot(pd_refernce_grid['xy'],'ko--',fill_markers=False)
+    make_van_opstal_paper_plot(pd_refernce_grid['xy'],marker='o',dashes=[5, 10],color='k',fill_markers=False)
     return pd_refernce_grid[['x','y']]
 
 
-def make_van_opstal_paper_plot_bootstrapped(pd_dataframe,columns,fmt_str):
+def make_van_opstal_paper_plot_bootstrapped(pd_dataframe,columns):
     pd_bs = pandas_bootstrap(pd_dataframe,columns,alpha=0.314)
     xerr = pd.DataFrame(pd_bs['xerr'].apply(pd.Series)).values.T
     yerr = pd.DataFrame(pd_bs['yerr'].apply(pd.Series)).values.T
-    plt.errorbar(pd_bs["x"],pd_bs["y"],xerr,yerr,fmt_str,ecolor='darkgray')
+    plt.errorbar(pd_bs["x"],pd_bs["y"],xerr,yerr,marker="o",linestyle='',
+                 color='k',ecolor='darkgray')
     pd_bs["xy"] = pd_bs[['x', 'y']].apply(tuple, axis=1)
-    make_van_opstal_paper_plot(pd_bs["xy"],fmt_str.replace("o",""))
+    make_van_opstal_paper_plot(pd_bs["xy"],marker="",color='k')
     plt.ylim(-30,30)
     plt.xlim(-30,30)
     plt.xticks(size = 20)
@@ -3720,15 +3847,17 @@ def plot_kulkarni_networks(pd_smoothed_hrir_mismatch):
     plt.figure(figsize=(10,10),dpi=200)
     plt.clf()
     order=[1024,512,256,128,64,32,16,8,4,2,1] 
-    pd_smoothed_hrir_mismatch_arch_mean = pd_smoothed_hrir_mismatch.groupby(["Smooth Factor","Architecture Number"]).mean().reset_index
+    pd_smoothed_hrir_mismatch_arch_mean = pd_smoothed_hrir_mismatch.groupby(["Smooth Factor","Architecture Number"]).mean().reset_index()
     sns.pointplot(x="Smooth Factor",y="Total Error",
-                  order=order,color='k',data=pd_smoothed_hrir_mismatch_arch_mean)
+                  order=order,color='k',markers=[""],
+                  data=pd_smoothed_hrir_mismatch_arch_mean)
     plt.xticks(range(len(order)),order,fontsize=30,rotation=45)
     plt.ylabel("Spatial Error (Degrees)",fontsize=30)
     plt.xlabel("Smooth Factor",fontsize=30)
     plt.yticks(fontsize=30)
     plt.tight_layout()
-    plt.savefig(plots_folder+"/"+"smooth_factor_vs_total_error_smoothed_fill_length_hrir_mathched_ylim.png")
+    pd_smoothed_hrir_mismatch_arch_mean.to_csv(plots_folder+"/"+"smooth_factor_vs_total_error_smoothed_fill_length_hrir_mathched_ylim.csv")
+    plt.savefig(plots_folder+"/"+"smooth_factor_vs_total_error_smoothed_fill_length_hrir_mathched_ylim.svg")
 
 
 azim_filter_list = [140,145,150,155,160,170,175,180,40,35,30,25,20,15,10,5,0,355,350,345,340,335,330,325,320,315,310,305,300,295,290,185,190,195,200,205,210,215,220]
@@ -3852,7 +3981,7 @@ def filter_ITD_values(row):
 
 def ILD_residuals_process(pd_dataframe_middlebrooks_wrightman_formatted):
     pd_dataframe_middlebrooks_wrightman_ITD_filtered = pd_dataframe_middlebrooks_wrightman_formatted[pd_dataframe_middlebrooks_wrightman_formatted['ITD'].isin([0])]
-    pd_dataframe_middlebrooks_wrightman_std_filtered=pd_dataframe_middlebrooks_wrightman_ITD_filtered[pd_dataframe_middlebrooks_wrightman_ITD_filtered['std']<= 14]
+    pd_dataframe_middlebrooks_wrightman_std_filtered=pd_dataframe_middlebrooks_wrightman_ITD_filtered[pd_dataframe_middlebrooks_wrightman_ITD_filtered['std']<=14]
     pd_unique_azims = pd_dataframe_middlebrooks_wrightman_std_filtered['azim'].unique()
     pd_azim_averages = pd_dataframe_middlebrooks_wrightman_std_filtered.query("ILD==0").groupby(['azim','low_high_cutoff'])['mean'].mean().reset_index()
     #filters out azimuth/bandwidth pairs where the average condtion had too
@@ -3901,7 +4030,12 @@ def ILD_residuals_plot(pd_dataframe_to_plot,extract_lines=False):
         plt.text(0.25,1.05,"ILD bias: {}".format(title_dict[low_high_cutoff]),fontsize=25,transform=plt.gca().transAxes)
         plt.gca().set_aspect(1)
         plt.tight_layout(1.2)
-        plt.savefig(plots_folder+"/"+"ILD_residuals_regression_{}.png".format(low_high_cutoff))
+        pd_out = (pd_dataframe_to_plot_filtered
+                  .groupby(["ILD (dB)","arch_index"])['ILD Observed Bias (dB)']
+                  .mean()
+                  .reset_index())
+        pd_out.to_csv(plots_folder+"/"+"ILD_residuals_regression_{}.csv".format(low_high_cutoff))
+        plt.savefig(plots_folder+"/"+"ILD_residuals_regression_{}.svg".format(low_high_cutoff))
         if extract_lines:
             pd_data = get_data_from_graph(use_points=True)
             extracted_data.append(pd_data)
@@ -3981,27 +4115,17 @@ def ITD_residuals_plot(pd_dataframe_to_plot,extract_lines=False):
         plt.text(0.25,1.05,"ITD bias: {}".format(title_dict[low_high_cutoff]),fontsize=25,transform=plt.gca().transAxes)
         plt.gca().set_aspect(1)
         plt.tight_layout(1.2)
-        plt.savefig(plots_folder+"/"+"ITD_residuals_regression_{}.png".format(low_high_cutoff))
+        pd_out = (pd_dataframe_to_plot_filtered
+                  .groupby(["ITD (us)","arch_index"])['ITD Observed Bias (us)']
+                  .mean()
+                  .reset_index())
+        pd_out.to_csv(plots_folder+"/"+"ITD_residuals_regression_{}.csv".format(low_high_cutoff))
+        plt.savefig(plots_folder+"/"+"ITD_residuals_regression_{}.svg".format(low_high_cutoff))
         if extract_lines:
             pd_data = get_data_from_graph(use_points=True)
             extracted_data.append(pd_data)
     if extract_lines:
         return extracted_data
-
-def make_ILD_swarm_graph(pd_dataframe_middlebrooks_wrightman_formatted):
-    pd_dataframe_middlebrooks_wrightman_formatted = pd_dataframe_middlebrooks_wrightman_formatted[pd_dataframe_middlebrooks_wrightman_formatted['azim'].isin([70,65,60,55,50,45,40,35,30,25,20,15,10,5,0,355,350,345,340,335,330,325,320,315,310,305,300,295,290])]
-    pd_dataframe_middlebrooks_wrightman_ITD_filtered = pd_dataframe_middlebrooks_wrightman_formatted[pd_dataframe_middlebrooks_wrightman_formatted['ITD'].isin([0])]
-    pd_dataframe_middlebrooks_wrightman_ITD_filtered['low_high_cutoff'] = pd_dataframe_middlebrooks_wrightman_ITD_filtered[['low_cutoff','high_cutoff']].apply(lambda x: str(tuple(x)),axis=1)
-    pd_unique_azims = pd_dataframe_middlebrooks_wrightman_ITD_filtered['azim'].unique()
-    for azim in pd_unique_azims:
-        query_string = "azim == {}".format(azim)
-        pd_dataframe_middlebrooks_wrightman_azim_filtered=pd_dataframe_middlebrooks_wrightman_ITD_filtered.query(query_string)
-        plt.clf()
-        sns.swarmplot(x='ILD',y='predicted_folded',hue='low_high_cutoff',data=pd_dataframe_middlebrooks_wrightman_azim_filtered)
-        plt.ylim(-90,90)
-        plt.title("ILD sensititivity swarm plot at {} Azim".format(azim))
-        plt.savefig(plots_folder+"/"+"ILD_sensitivity_vs_angle_swarmplot_at_{}_azim.png".format(azim))
-
 
 def make_ITD_graph(pd_dataframe_middlebrooks_wrightman_formatted):
     pd_dataframe_middlebrooks_wrightman_ITD_filtered = pd_dataframe_middlebrooks_wrightman_formatted[pd_dataframe_middlebrooks_wrightman_formatted['ILD'].isin([0])]
@@ -4085,93 +4209,10 @@ def get_power_spectrum(p_spec_full,center_freqs):
     df = df.astype({"Filter Center Frequency":"float32", 
                     "Average Cochlear Magnitude":"float32"})
     return df
-    
-def open_SDR_data(fname):
-    with open(fname,'r') as f:
-        SDR_list = json.load(f)
-    cols = ["SNR","NOISE","SDR_input_mean","SDR_processed_mean","SDR_input_var","SDR_processed_var","IDX"]
-    pd_SDR_data = pd.DataFrame(columns=cols)
-    for stim_dict in SDR_list:
-        pd_SDR_data = pd_SDR_data.append(stim_dict,ignore_index=True)
-    pd_SDR_data['SDR Improvement (dB)'] = pd_SDR_data["SDR_processed_mean"] - pd_SDR_data["SDR_input_mean"]
-    pd_SDR_data['SNR'] = pd_SDR_data['SNR'].apply(float_from_string_of_bytes)
-    pd_SDR_data = pd_SDR_data.convert_objects(convert_numeric=True)
-    return pd_SDR_data
-
-def afc_to_pd(afc_results_array,afc_arch_names):
-    cols = ['offset','frequency','predicted_difference','ground_truth_direction',
-            'correct','arch_index','init_index']
-    for afc_results,arch_name,init_name in zip(afc_results_array,*afc_arch_names):
-        flat_list = flatten(afc_results)
-        arch_afc_results = [[abs(x[0][0]),x[1][1],x[2],sign(x[3]),
-                            x[4],arch_name,init_name] for x in flat_list]
-        np_afc_results = np.array(arch_afc_results)
-        df = pd.DataFrame(data=np_afc_results,columns=cols)
-        main_df_afc = df if 'main_df_afc' not in locals() else pd.concat([main_df_afc,df]).reset_index(drop=True)
-    main_df_afc['frequency_bin'] = pd_afc_large_step.apply(assign_ITD_tone_group_abs,axis=1)
-    return main_df_afc
         
 
 low_ci = lambda row: row['mean'] - 1.96*row['std']/math.sqrt(row['count'])
 high_ci = lambda row: row['mean'] + 1.96*row['std']/math.sqrt(row['count'])
-
-def find_adaptive_threshold(pd_afc_results,start_value=300):
-    afc_grouped = pd_afc_results.groupby(['frequency_bin','offset'])
-    afc_correct_stats = afc_grouped['correct'].agg([np.mean,'count',np.std]).reset_index()
-    afc_correct_stats['low_95ci'] = afc_correct_stats.apply(low_ci,axis=1)
-    afc_correct_stats['high_95ci'] = afc_correct_stats.apply(high_ci,axis=1)
-    afc_correct_stats_grouped = afc_correct_stats.groupby(['frequency_bin'])
-    freq_min_ITD = {}
-    for freq_bin,group in afc_correct_stats_grouped:
-        for row_num,row in group.sort_values(by=['offset'],ascending=False).iterrows():
-            if row['offset'] > start_value: continue
-            if row['low_95ci'] < 0.5:break
-            freq_min_ITD[freq_bin] = row['offset']
-    return freq_min_ITD
-
-def find_adaptive_threshold_mean(pd_afc_results,start_value=300,threshold=0.60):
-    afc_grouped = pd_afc_results.groupby(['frequency_bin','offset'])
-    afc_correct_stats = afc_grouped['correct'].agg([np.mean,'count',np.std]).reset_index()
-    afc_correct_stats['low_95ci'] = afc_correct_stats.apply(low_ci,axis=1)
-    afc_correct_stats['high_95ci'] = afc_correct_stats.apply(high_ci,axis=1)
-    afc_correct_stats_grouped = afc_correct_stats.groupby(['frequency_bin'])
-    freq_min_ITD = {}
-    for freq_bin,group in afc_correct_stats_grouped:
-        for row_num,row in group.sort_values(by=['offset'],ascending=False).iterrows():
-            if row['offset'] > start_value: continue
-            if row['mean'] < threshold:  break
-            freq_min_ITD[freq_bin] = row['offset']
-    return freq_min_ITD
-
-def make_psychometric_functions(pd_afc_results,start_value=300):
-    afc_grouped = pd_afc_results.groupby(['frequency_bin','offset'])
-    afc_correct_stats = afc_grouped['correct'].agg([np.mean,'count',np.std]).reset_index()
-    afc_correct_stats['low_95ci'] = afc_correct_stats.apply(low_ci,axis=1)
-    afc_correct_stats['high_95ci'] = afc_correct_stats.apply(high_ci,axis=1)
-    afc_correct_stats_grouped = afc_correct_stats.groupby(['frequency_bin'])
-    freq_min_ITD = {}
-    for freq_bin,group in afc_correct_stats_grouped:
-        plt.clf()
-        sns.lineplot(x="offset",y="mean",data=group)
-        plt.ylim(0,10)
-        plt.savefig(plots_folder+"/"+"psychometric_function_at_freq{}_trained_reverb_bkgd5db40dBSNR_large_step.png".format(freq_bin))
-    
-def interactive_adaptive_threshold(pd_afc_results,start_value=300):
-    afc_grouped = pd_afc_results.groupby(['frequency_bin','offset'])
-    afc_correct_stats = afc_grouped['correct'].agg([np.mean,'count',np.std]).reset_index()
-    afc_correct_stats['low_95ci'] = afc_correct_stats.apply(low_ci,axis=1)
-    afc_correct_stats['high_95ci'] = afc_correct_stats.apply(high_ci,axis=1)
-    afc_correct_stats_grouped = afc_correct_stats.groupby(['frequency_bin'])
-    freq_min_ITD = {}
-    for freq_bin,group in afc_correct_stats_grouped:
-        sorted_group = group.sort_values(by=['offset'],ascending=False)
-        
-        pdb.set_trace()
-        for row_num,row in sorted_group.iterrows():
-            if row['offset'] > start_value: continue
-            if row['low_95ci'] < 0.5:break
-            freq_min_ITD[freq_bin] = row['offset']
-    return freq_min_ITD
 
 def format_binaural_test_set_frontback_folded(pd_dataframe_folded):
     pd_dataframe_folded['azim_folded'] = pd_dataframe_folded['azim'].apply(CIPIC_azim_folding)
@@ -4210,13 +4251,13 @@ def fig_2c():
     rgb_cmap = get_grayscale_colormap()
     plt.clf()
     sns.catplot(kind="violin",x="Actual Position (Degrees)",
-                y="Predicted Position (Degrees)", height=8,
-                aspect=1.45,inner='quartile',
                 data=pd_dataframe_folded.astype('int32'),palette=rgb_cmap)
     format_binarural_test_folded_graph()
     plt.tight_layout()
+    pd_dataframe_folded.to_csv(plots_folder+"/"+("binaural_recorded_4078_main_kemar_full_spec_folded"
+                                                  "_violinplot_quartile_grayscale_front_limited.csv"))
     plt.savefig(plots_folder+"/"+("binaural_recorded_4078_main_kemar_full_spec_folded"
-                                  "_violinplot_quartile_grayscale_front_limited.png"))
+                                  "_violinplot_quartile_grayscale_front_limited.svg"))
 
 def fig_2d():
     pd_dataframe_folded = make_dataframe(("/om2/user/francl/grp-om2/gahlm/dataset_pipeline_test/"
@@ -4234,12 +4275,14 @@ def fig_2d():
     plt.yticks([-180,-150,-120,-90,-60,-30,0,30,60,90,120,150,180])
     plt.ylim(-190,190)
     plt.tight_layout()
+    pd_dataframe_folded.to_csv(plots_folder+"/"+("binaural_recorded_4078_main_kemar_full_spec_folded"
+                                                 "_violinplot_quartile_grayscale_centered.csv"))
     plt.savefig(plots_folder+"/"+("binaural_recorded_4078_main_kemar_full_spec_folded"
-                                  "_violinplot_quartile_grayscale_centered.png"),dpi=400)
+                                  "_violinplot_quartile_grayscale_centered.svg"))
 
 def fig_4b():
     format_data_wood_human_data("/om/user/francl/wood_localization_errorbar.csv",add_errorbars=True)
-    plt.savefig(plots_folder+"/azimuth_vs_error_wood_human.png",dpi=400)
+    plt.savefig(plots_folder+"/azimuth_vs_error_wood_human.svg")
 
 def fig_3c(regex=None,iter_num=100000):
     if regex is not None:
@@ -4253,7 +4296,17 @@ def fig_4c(regex=None,iter_num=100000):
                   "broadbandNoiseRecords_wood_convolved_anechoic_"
                   "oldHRIRdist140_stackedCH_upsampled_iter{}*".format(iter_num))
     make_wood_network_plot(regex)
-    plt.xticks([-50,0,50])
+    plt.xlim(-95,95)
+    plt.xticks([-90,-45,0,45,90])
+    plt.savefig(plots_folder+"/azimuth_vs_error_wood_graph_network.svg",dpi=400)
+
+def fig_4c_corrected(regex=None,iter_num=100000):
+    if regex is not None:
+        regex = regex + ("arch_number_*init_0/batch_conditional_"
+                         "*_wood_bizley_03092022_iter{}*".format(iter_num))
+        print(regex)
+    make_wood_bizley_network_plot(regex)
+    plt.ylim(0,50)
     plt.savefig(plots_folder+"/azimuth_vs_error_wood_graph_network.png",dpi=400)
 
 def fig_4e():
@@ -4264,16 +4317,13 @@ def fig_4f(regex=None,iter_num=100000):
         regex = regex + ("arch_number_*init_0/batch_conditional*bandpass"
                   "*HRIR*iter{}.npy".format(iter_num))
     make_yost_network_plot(regex)
-    plt.ylim(0,35)
-    plt.savefig(plots_folder+"/bandwidth_vs_error_network_plot.png")
-
-def fig_5b_and_5c():
-    plt.clf()
-    get_van_opstal_human_plot("before",hardcode_ref_grid=True)
-    plt.savefig(plots_folder+"/van_opstal_before_human_hardcoded_ref.png",dpi=400)
+    plt.ylim(0,25)
+    plt.savefig(plots_folder+"/bandwidth_vs_error_network_plot.svg")
     plt.clf()
     get_van_opstal_human_plot("after",hardcode_ref_grid=True)
-    plt.savefig(plots_folder+"/van_opstal_after_human_hardcoded_ref.png",dpi=400)
+    plt.savefig(plots_folder+"/van_opstal_after_human_hardcoded_ref.svg")
+    get_van_opstal_human_plot("before",hardcode_ref_grid=True)
+    plt.savefig(plots_folder+"/van_opstal_before_human_hardcoded_ref.svg")
 
 def fig_5d_and_5e(regex=None,iter_num=100000):
     if regex is not None:
@@ -4283,6 +4333,8 @@ def fig_5d_and_5e(regex=None,iter_num=100000):
     make_van_opstal_network_plots(regex)
 
 def fig_5f_and_g(regex=None):
+    make_van_opstal_plot_individual_networks(regex)
+
     make_van_opstal_plot_individual_networks(regex)
 
 def fig_5j(regex=None,iter_num=100000):
@@ -4301,7 +4353,7 @@ def fig_6b(regex=None):
 def fig_6c():
     make_litovsky_human_plot(add_errorbars=True)
     plt.gca().legend().remove()
-    plt.savefig(plots_folder+"/litovsky_errorbars_seaborn.png",dpi=400)
+    plt.savefig(plots_folder+"/litovsky_errorbars_seaborn.svg")
 
 def fig_6d(regex=None,iter_num=100000):
     if regex is not None:
@@ -4309,23 +4361,64 @@ def fig_6d(regex=None,iter_num=100000):
                         "precedence*multiAzim*pinknoise*5degStep*iter{}*".format(iter_num))
     litovsky_error_plot_multi_azim(regex=regex)
     plt.gca().legend().remove()
-    plt.savefig(plots_folder+"/precedence_effect_litovsky_rmse_plots_network.png",dpi=400)
+    plt.savefig(plots_folder+"/precedence_effect_litovsky_rmse_plots_network.svg")
+
+def fig_hebrank_wright(regex=None,iter_num=100000):
+    if regex is not None:
+        regex = regex + ("arch_number_*_init_0/batch_conditional_"
+                            "noiseRecords_hebrank_wright_iter{}.npy".format(iter_num))
+    else:
+        regex = ("/om5/user/francl/grp-om2/gahlm/dataset_pipeline_test/"
+                 "arch_number_*_init_0/batch_conditional_"
+                 "noiseRecords_hebrank_wright_iter{}.npy".format(iter_num))
+    pd_hebrank_wright = make_dataframe(regex,elevation_predictions=True)
+    pd_hebrank_wright_formatted = format_hebrank_wright_dataframe_azim_limited(pd_hebrank_wright)
+    make_hebrank_wright_human_plot()
+    make_hebrank_wright_plots(pd_hebrank_wright_formatted)
+
+    
 
 def fig_7b_and_7c():
-    get_individual_error_graph(["/om2/user/francl/grp-om2/gahlm/dataset_pipeline_test/",
-                                "/om2/user/francl/new_task_archs/new_task_archs_anechoic_training/",
-                                "/om2/user/francl/new_task_archs/new_task_archs_no_background_noise_80dBSNR_training/",
-                                "/om2/user/francl/new_task_archs/new_task_archs_logspaced_0.5octv_fluctuating_noise_training/"],
+    get_individual_error_graph(["/om5/user/francl/grp-om2/gahlm/dataset_pipeline_test/",
+                                "/om5/user/francl/new_task_archs/new_task_archs_anechoic_training/",
+                                "/om5/user/francl/new_task_archs/new_task_archs_no_background_noise_80dBSNR_training/",
+                                "/om5/user/francl/new_task_archs/new_task_archs_logspaced_0.5octv_fluctuating_noise_training/"],
+                                #"/om2/user/francl/new_task_archs/new_task_archs_spectrally_modulated_natural_sounds_40_MFCC_10_depth/"],
+                               #"/om2/user/francl/new_task_archs/new_task_archs_spectrally_modulated_noise_248_MFCC_80_depth/"],
+                               # "/om5/user/francl/new_task_archs/new_task_archs_logspaced_0.5octv_fluctuating_noise_training/",
+                                #"/om2/user/francl/new_task_archs/new_task_archs_logspaced_0.5octv_fluctuating_noise_anechoic_no_background_noise_80dBSNR_training/"],
                                iter_nums=[100000,100000,100000,150000],
-                               condtion_names=["Normal", "Anechoic", "No Background","Unnatural Sounds"]) 
+                               condtion_names=["Normal", "Anechoic", "No Background","Bandlimited"])
+    #,"Spec. Mod. Sounds"])
+                               #,"Combined Minipulations"]) 
 
 def fig_7e():
-    get_error_graph_by_task(["/om2/user/francl/grp-om2/gahlm/dataset_pipeline_test/",
-                             "/om2/user/francl/new_task_archs/new_task_archs_anechoic_training/",
-                             "/om2/user/francl/new_task_archs/new_task_archs_no_background_noise_80dBSNR_training/",
-                             "/om2/user/francl/new_task_archs/new_task_archs_logspaced_0.5octv_fluctuating_noise_training/"],
+    get_error_graph_by_task(["/om5/user/francl/grp-om2/gahlm/dataset_pipeline_test/",
+                             "/om5/user/francl/new_task_archs/new_task_archs_anechoic_training/",
+                             "/om5/user/francl/new_task_archs/new_task_archs_no_background_noise_80dBSNR_training/",
+                             #"/om2/user/francl/new_task_archs/new_task_archs_spectrally_modulated_noise_2_MFCC_60_depth/"],
+                             "/om5/user/francl/new_task_archs/new_task_archs_logspaced_0.5octv_fluctuating_noise_training/"],
+                             #"/om2/user/francl/new_task_archs/new_task_archs_no_background_noise_80dBSNR_with_neural_noise_61dBSNR_training/"],
+                             #"/om2/user/francl/new_task_archs/new_task_archs_spectrally_modulated_natural_sounds_40_MFCC_10_depth/"],
                             iter_nums=[100000,100000,100000,150000],
-                            condtion_names=["Normal", "Anechoic", "No Background","Unnatural Sounds"])
+                            condtion_names=["Normal", "Anechoic", "No Background","Bandlimited"])
+    #,"Spectrally Modulated"])
+                            #condtion_names=["Normal", "Anechoic", "No Background","Unnatural Low Spec. Mod. Sounds"])
+
+def make_si_fig_rmse_with_human_floor():
+    get_mean_error_graph_subset(["/om5/user/francl/grp-om2/gahlm/dataset_pipeline_test/"],
+                                #"/om5/user/francl/new_task_archs/new_task_archs_anechoic_training/",
+                                #"/om5/user/francl/new_task_archs/new_task_archs_no_background_noise_80dBSNR_training/",
+                                #"/om2/user/francl/new_task_archs/new_task_archs_spectrally_modulated_natural_sounds_40_MFCC_10_depth/"],
+                               #"/om2/user/francl/new_task_archs/new_task_archs_spectrally_modulated_noise_248_MFCC_80_depth/"],
+                               # "/om5/user/francl/new_task_archs/new_task_archs_logspaced_0.5octv_fluctuating_noise_training/",
+                                #"/om5/user/francl/new_task_archs/new_task_archs_logspaced_0.5octv_fluctuating_noise_training/",
+                                #"/om2/user/francl/new_task_archs/new_task_archs_logspaced_0.5octv_fluctuating_noise_anechoic_no_background_noise_80dBSNR_training/"],
+                               iter_nums=[100000],
+                               condtion_names=["Normal"],
+                               experiment_subset=['wood','yost','kulkarni','van_opstal','litovsky'])
+                               #,"Combined Minipulations"]) 
+
 
 def fig_7d():
     make_click_precedence_effect_across_conditions()
@@ -4334,11 +4427,22 @@ def make_alternative_training_graphs(function,regex_list=None,
                                      output_folder_list=None):
     global plots_folder
     if regex_list is None:
-        regex_list = ["/om5/user/francl/new_task_archs/new_task_archs_anechoic_training/",
+        regex_list = [
+                     "/om5/user/francl/new_task_archs/new_task_archs_anechoic_training/",
                      "/om5/user/francl/new_task_archs/new_task_archs_no_background_noise_80dBSNR_training/",
+                     #"/om2/user/francl/new_task_archs/new_task_archs_spectrally_modulated_noise_2_MFCC_60_depth/",
+                     #"/om2/user/francl/new_task_archs/new_task_archs_spectrally_modulated_noise_248_MFCC_80_depth/"]
                      "/om5/user/francl/new_task_archs/new_task_archs_logspaced_0.5octv_fluctuating_noise_training/"]
+                     #"/om2/user/francl/new_task_archs/new_task_archs_logspaced_0.5octv_fluctuating_noise_anechoic_no_background_noise_80dBSNR_training/"]
+                     #"/om2/user/francl/new_task_archs/new_task_archs_no_background_noise_80dBSNR_with_neural_noise_61dBSNR_training/"]
+                     #"/om2/user/francl/new_task_archs/new_task_archs_spectrally_modulated_natural_sounds_40_MFCC_10_depth/"]
         iter_nums = [100000,100000,150000]
-        output_folder_list = ["/anechoic_training","/noiseless_training","/unnatural_sounds_training"]
+        #iter_nums = [100000]
+        output_folder_list = ["/anechoic_training","/noiseless_training","/half_octave_noise"]
+        #output_folder_list = ["/half_octave_noise"]
+        #output_folder_list = ["/no_background_noise_with_neural_noise"]
+        #output_folder_list = ["/MFCC_2_spec_mod_training","/MFCC_248_spec_mod_training"]
+                              #"/unnatural_sounds_training","/unnatural_sounds_training_anechoic_80dBSNR"]
     plots_folder_original = plots_folder
     for regex,output_folder,iter_num in zip(regex_list,output_folder_list,iter_nums):
         plots_folder = plots_folder_original + output_folder
@@ -4351,5 +4455,24 @@ def make_alternative_training_graphs(function,regex_list=None,
     plots_folder = plots_folder_original
 
 
-
-
+fig_2c()
+fig_2d()
+fig_4b()
+fig_3c()
+fig_4c()
+fig_4c_corrected()
+fig_4e()
+fig_4f()
+fig_5d_and_5e()
+fig_5f_and_g()
+fig_5j()
+fig_5k_and_l()
+fig_6b()
+fig_6c()
+fig_6d()
+fig_hebrank_wright()
+fig_7b_and_7c()
+fig_7e()
+make_si_fig_rmse_with_human_floor()
+fig_7d()
+make_alternative_training_graphs()
