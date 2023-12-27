@@ -1,0 +1,1 @@
+This folder contains thaat finetuning code used to modify the weights in the fully connected layer for multi-source localization. If you would like to use the networkfor downstream inference tasks, Weights are available at the dropbox link: https://www.dropbox.com/scl/fo/vo54e04rxgf2nu2qt5vsi/h?rlkey=3hc76g3ngbg6lqxtwqp5t3you&dl=0 
